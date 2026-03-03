@@ -20,9 +20,8 @@ EnvironmentFile=/etc/greenhouse/greenhouse.env
 # Working directory (for relative paths if needed)
 WorkingDirectory=/opt/greenhouse
 
-# The main command - uses Python from a virtual environment
-# Adjust the path to match your installation
-ExecStart=/opt/greenhouse/venv/bin/python /opt/greenhouse/greenhouse_monitor.py
+# The main command - uses the installed console script from the venv
+ExecStart=/opt/greenhouse/venv/bin/greenhouse-monitor
 
 # Restart configuration
 Restart=on-failure

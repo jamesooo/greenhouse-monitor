@@ -25,6 +25,7 @@ CONFIG_DIR="/etc/greenhouse"
 VENV_DIR="${INSTALL_DIR}/venv"
 CAPTURES_DIR="${INSTALL_DIR}/captures"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${SCRIPT_DIR}/.."
 
 echo -e "${YELLOW}Installation directory: ${INSTALL_DIR}${NC}"
 echo -e "${YELLOW}Config directory: ${CONFIG_DIR}${NC}"
@@ -35,31 +36,35 @@ mkdir -p "${INSTALL_DIR}"
 mkdir -p "${CONFIG_DIR}"
 mkdir -p "${CAPTURES_DIR}"
 
-# Copy the main script
-echo -e "${GREEN}Installing greenhouse_monitor.py...${NC}"
-cp "${SCRIPT_DIR}/greenhouse_monitor.py" "${INSTALL_DIR}/"
-chmod +x "${INSTALL_DIR}/greenhouse_monitor.py"
-
 # Create Python virtual environment if it doesn't exist
 if [ ! -d "${VENV_DIR}" ]; then
     echo -e "${GREEN}Creating Python virtual environment...${NC}"
     python3 -m venv "${VENV_DIR}"
 fi
 
-# Install dependencies
-echo -e "${GREEN}Installing Python dependencies...${NC}"
+# Install dependencies and the package
+echo -e "${GREEN}Installing pysenxor and greenhouse-monitor...${NC}"
 "${VENV_DIR}/bin/pip" install --upgrade pip
-"${VENV_DIR}/bin/pip" install \
-    bleak \
-    paho-mqtt \
-    opencv-python-headless \
-    numpy \
-    pyserial
 
-# Install senxor if available locally
-if [ -f "${SCRIPT_DIR}/../setup.py" ]; then
-    echo -e "${GREEN}Installing senxor from local source...${NC}"
-    "${VENV_DIR}/bin/pip" install -e "${SCRIPT_DIR}/.."
+# Install the full package (includes senxor + greenhouse + console script)
+if [ -f "${REPO_DIR}/setup.py" ]; then
+    echo -e "${GREEN}Installing from local source...${NC}"
+    "${VENV_DIR}/bin/pip" install -e "${REPO_DIR}"
+else
+    echo -e "${YELLOW}No setup.py found, installing dependencies only...${NC}"
+    "${VENV_DIR}/bin/pip" install \
+        bleak \
+        paho-mqtt \
+        opencv-python-headless \
+        numpy \
+        pyserial
+fi
+
+# Verify greenhouse-monitor is available
+if "${VENV_DIR}/bin/greenhouse-monitor" --help > /dev/null 2>&1; then
+    echo -e "${GREEN}greenhouse-monitor command installed successfully${NC}"
+else
+    echo -e "${YELLOW}Warning: greenhouse-monitor command not found in venv${NC}"
 fi
 
 # Install environment file (don't overwrite if exists)

@@ -47,13 +47,27 @@ setup(
     package_dir={"": "."},
     packages=[
         "senxor",
+        "greenhouse",
     ],
     scripts=[],
+    entry_points={
+        "console_scripts": [
+            "greenhouse-monitor=greenhouse.greenhouse_monitor:main",
+        ],
+    },
     classifiers=[
         "Programming Language :: Python",
         "Operating System :: OS Independent",
         "Topic :: Scientific/Engineering",
     ],
+    package_data={
+        "greenhouse": [
+            "greenhouse.env",
+            "greenhouse-monitor.service",
+            "install-service.sh",
+            "README.md",
+        ],
+    },
     long_description="""
 
 """,

@@ -35,7 +35,7 @@ A unified monitoring solution for greenhouse environments running on Raspberry P
 
 ```bash
 # Clone or copy the pysenxor repository
-cd /path/to/pysenxor-master/example
+cd /path/to/pysenxor-master/greenhouse
 
 # Run the installer (requires root)
 sudo ./install-service.sh
@@ -51,22 +51,17 @@ sudo mkdir -p /etc/greenhouse
 # Create virtual environment
 python3 -m venv /opt/greenhouse/venv
 
-# Install dependencies
-/opt/greenhouse/venv/bin/pip install \
-    bleak \
-    paho-mqtt \
-    opencv-python-headless \
-    numpy \
-    pyserial
-
-# Install senxor library
+# Install pysenxor with greenhouse-monitor
 cd /path/to/pysenxor-master
 /opt/greenhouse/venv/bin/pip install -e .
 
-# Copy files
-sudo cp example/greenhouse_monitor.py /opt/greenhouse/
-sudo cp example/greenhouse.env /etc/greenhouse/
-sudo cp example/greenhouse-monitor.service /etc/systemd/system/
+# This installs the 'greenhouse-monitor' command to the venv's bin/
+# Verify installation:
+/opt/greenhouse/venv/bin/greenhouse-monitor --help
+
+# Copy configuration files
+sudo cp greenhouse/greenhouse.env /etc/greenhouse/
+sudo cp greenhouse/greenhouse-monitor.service /etc/systemd/system/
 ```
 
 ## Configuration
