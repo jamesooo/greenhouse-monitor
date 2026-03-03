@@ -1,0 +1,11 @@
+[Unit]
+Description=Run camera capture every hour
+Requires=camera-capture.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

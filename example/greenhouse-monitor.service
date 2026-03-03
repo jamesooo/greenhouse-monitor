@@ -1,0 +1,67 @@
+[Unit]
+Description=Greenhouse Monitor - BLE Climate, Optical, and Thermal Camera Monitoring
+Documentation=https://github.com/your-repo/pysenxor
+After=network.target bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=root
+# Root required for USB bind/unbind operations
+# If running as non-root, ensure user has permissions for:
+#   - /sys/bus/usb/drivers/usb/bind and unbind
+#   - Serial ports (/dev/ttyUSB*, /dev/ttyACM*)
+#   - Video devices (/dev/video*)
+#   - Bluetooth
+
+# Environment file with all configuration
+EnvironmentFile=/etc/greenhouse/greenhouse.env
+
+# Working directory (for relative paths if needed)
+WorkingDirectory=/opt/greenhouse
+
+# The main command - uses Python from a virtual environment
+# Adjust the path to match your installation
+ExecStart=/opt/greenhouse/venv/bin/python /opt/greenhouse/greenhouse_monitor.py
+
+# Restart configuration
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Watchdog - restart if service hangs
+WatchdogSec=600
+
+# Resource limits (optimized for Pi Zero 2 W)
+# 256MB memory limit - adjust based on your needs
+MemoryMax=256M
+MemoryHigh=200M
+
+# CPU quota - limit to 50% of one core to leave headroom
+CPUQuota=50%
+
+# Nice priority (lower priority than system tasks)
+Nice=10
+
+# I/O scheduling (best-effort, low priority)
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/greenhouse
+ReadWritePaths=/opt/greenhouse/captures
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=greenhouse-monitor
+
+# Graceful shutdown timeout
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
