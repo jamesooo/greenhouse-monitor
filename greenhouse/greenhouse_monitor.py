@@ -45,6 +45,7 @@ from typing import Optional, Tuple, List
 
 import cv2 as cv
 import numpy as np
+from croniter import croniter
 
 # Optional imports with graceful fallback
 MQTT_AVAILABLE = False
@@ -477,7 +478,10 @@ def capture_optical_with_light_metrics(
     output_dir: str,
     bright_thresh: int = 220,
     dark_thresh: int = 30,
-    save_image: bool = True
+    save_image: bool = True,
+    image_width: int = 1920,
+    image_height: int = 1080,
+    jpeg_quality: int = 95
 ) -> Tuple[Optional[str], Optional[LightMetrics]]:
     """
     Capture optical image and compute light metrics.
@@ -488,6 +492,9 @@ def capture_optical_with_light_metrics(
         bright_thresh: Threshold for bright pixel ratio
         dark_thresh: Threshold for dark pixel ratio
         save_image: If False, only compute metrics without saving image
+        image_width: Requested width for saved images
+        image_height: Requested height for saved images
+        jpeg_quality: JPEG encoding quality from 0 to 100
     
     Memory-optimized: processes image in-place, releases resources immediately.
     """
@@ -499,9 +506,11 @@ def capture_optical_with_light_metrics(
             logger.error("Could not open optical camera")
             return None, None
         
-        # Low resolution for Pi Zero 2 W memory efficiency
-        cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+        # Metrics-only captures stay small; archival captures use the configured size.
+        capture_width = image_width if save_image else 640
+        capture_height = image_height if save_image else 480
+        cap.set(cv.CAP_PROP_FRAME_WIDTH, capture_width)
+        cap.set(cv.CAP_PROP_FRAME_HEIGHT, capture_height)
         cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
         
         # Flush buffer (exposure/white balance adjustment)
@@ -535,8 +544,12 @@ def capture_optical_with_light_metrics(
         filename = None
         if save_image:
             filename = os.path.join(output_dir, f"optical_{int(time.time())}.jpg")
-            if cv.imwrite(filename, frame):
-                logger.info(f"Saved optical image: {filename}")
+            if cv.imwrite(filename, frame, [cv.IMWRITE_JPEG_QUALITY, jpeg_quality]):
+                height, width = frame.shape[:2]
+                logger.info(
+                    f"Saved optical image: {filename} "
+                    f"({width}x{height}, JPEG quality {jpeg_quality})"
+                )
             else:
                 logger.error(f"Failed to write optical image: {filename}")
                 filename = None
@@ -573,7 +586,10 @@ class GreenhouseMonitor:
         output_dir: str,
         ble_interval: int = 60,
         camera_interval: int = 300,
-        image_capture_interval: int = 0
+        image_capture_cron: str = "0 9,15 * * *",
+        image_width: int = 1920,
+        image_height: int = 1080,
+        jpeg_quality: int = 95
     ):
         self.ble_addresses = ble_addresses
         self.mqtt = mqtt_publisher
@@ -581,17 +597,14 @@ class GreenhouseMonitor:
         self.output_dir = output_dir
         self.ble_interval = ble_interval
         self.camera_interval = camera_interval
-        
-        # Image capture interval: 0 = same as camera_interval, -1 = disabled
-        if image_capture_interval == 0:
-            self.image_capture_interval = camera_interval
-        elif image_capture_interval < 0:
-            self.image_capture_interval = None  # Disabled
-        else:
-            self.image_capture_interval = image_capture_interval
-        
-        # Track last image save times
-        self._last_optical_image_time: float = 0
+        self.image_width = image_width
+        self.image_height = image_height
+        self.jpeg_quality = jpeg_quality
+        self.image_capture_cron = image_capture_cron
+        self._next_image_capture = (
+            croniter(image_capture_cron, datetime.now()).get_next(datetime)
+            if image_capture_cron else None
+        )
         
         # Single thread for camera operations (memory efficient)
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -666,8 +679,11 @@ class GreenhouseMonitor:
     async def optical_capture_loop(self):
         """Capture optical images at regular intervals."""
         logger.info(f"Starting optical capture loop (interval: {self.camera_interval}s)")
-        if self.image_capture_interval:
-            logger.info(f"Optical image save interval: {self.image_capture_interval}s")
+        if self._next_image_capture:
+            logger.info(
+                f"Optical image schedule: {self.image_capture_cron} "
+                f"(next capture: {self._next_image_capture.isoformat(timespec='minutes')})"
+            )
         else:
             logger.info("Optical image saving disabled (metrics only)")
         
@@ -684,10 +700,10 @@ class GreenhouseMonitor:
                 continue
             
             # Determine if we should save an image this cycle
-            should_save_image = False
-            if self.image_capture_interval is not None:
-                time_since_last = time.monotonic() - self._last_optical_image_time
-                should_save_image = time_since_last >= self.image_capture_interval
+            should_save_image = (
+                self._next_image_capture is not None
+                and datetime.now() >= self._next_image_capture
+            )
             
             try:
                 logger.info("Acquiring exclusive optical camera access...")
@@ -700,7 +716,10 @@ class GreenhouseMonitor:
                                 functools.partial(
                                     capture_optical_with_light_metrics,
                                     self.output_dir,
-                                    save_image=should_save_image
+                                    save_image=should_save_image,
+                                    image_width=self.image_width,
+                                    image_height=self.image_height,
+                                    jpeg_quality=self.jpeg_quality
                                 )
                             ),
                             timeout=self.optical_capture_timeout
@@ -715,9 +734,15 @@ class GreenhouseMonitor:
                                 self.mqtt.publish_light(light_metrics)
                             await cb.record_success()
                             
-                            # Update last image save time if we saved
+                            # Advance the schedule only after a successful image save
                             if image_path:
-                                self._last_optical_image_time = time.monotonic()
+                                self._next_image_capture = croniter(
+                                    self.image_capture_cron, datetime.now()
+                                ).get_next(datetime)
+                                logger.info(
+                                    "Next optical image capture: "
+                                    f"{self._next_image_capture.isoformat(timespec='minutes')}"
+                                )
                         else:
                             logger.warning("Optical capture returned no metrics")
                             await cb.record_failure()
@@ -812,6 +837,30 @@ def env_or_default(env_var: str, default, cast_type=str):
     return cast_type(val)
 
 
+def positive_int(value: str) -> int:
+    """Parse a positive integer for pixel dimensions."""
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def jpeg_quality(value: str) -> int:
+    """Parse a JPEG quality value from 0 to 100."""
+    parsed = int(value)
+    if not 0 <= parsed <= 100:
+        raise argparse.ArgumentTypeError("must be between 0 and 100")
+    return parsed
+
+
+def cron_expression(value: str) -> str:
+    """Validate a five-field cron expression; an empty value disables saving."""
+    value = value.strip()
+    if value and (len(value.split()) != 5 or not croniter.is_valid(value)):
+        raise argparse.ArgumentTypeError("must be a valid five-field cron expression")
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Unified Greenhouse Monitoring for Raspberry Pi Zero 2 W",
@@ -822,7 +871,10 @@ Environment Variables:
     GREENHOUSE_BLE_ADDRESSES     - Comma-separated BLE MAC addresses
     GREENHOUSE_BLE_INTERVAL      - BLE polling interval in seconds
     GREENHOUSE_CAMERA_INTERVAL   - Camera metric collection interval in seconds
-    GREENHOUSE_IMAGE_CAPTURE_INTERVAL - Image save interval (0=same as camera, -1=disabled)
+    GREENHOUSE_IMAGE_CAPTURE_CRON - Image save schedule in local time (empty=disabled)
+    GREENHOUSE_IMAGE_WIDTH       - Requested saved image width in pixels
+    GREENHOUSE_IMAGE_HEIGHT      - Requested saved image height in pixels
+    GREENHOUSE_JPEG_QUALITY      - Saved JPEG quality (0-100)
     GREENHOUSE_OPTICAL_USB_ID    - USB ID for optical camera
     GREENHOUSE_OUTPUT_DIR        - Directory to save captured images
     GREENHOUSE_MQTT_HOST         - MQTT broker address
@@ -871,11 +923,33 @@ Examples:
              "(env: GREENHOUSE_CAMERA_INTERVAL)"
     )
     parser.add_argument(
-        "--image-capture-interval",
-        type=int,
-        default=env_or_default("GREENHOUSE_IMAGE_CAPTURE_INTERVAL", 0, int),
-        help="Image save interval in seconds (default: 0 = same as camera-interval, "
-             "-1 = never save images) (env: GREENHOUSE_IMAGE_CAPTURE_INTERVAL)"
+        "--image-capture-cron",
+        type=cron_expression,
+        default=env_or_default("GREENHOUSE_IMAGE_CAPTURE_CRON", "0 9,15 * * *"),
+        help="Five-field cron schedule for saved images in local time; empty disables "
+             "saving (default: '0 9,15 * * *') (env: GREENHOUSE_IMAGE_CAPTURE_CRON)"
+    )
+    parser.add_argument(
+        "--image-width",
+        type=positive_int,
+        default=env_or_default("GREENHOUSE_IMAGE_WIDTH", 1920, positive_int),
+        help="Requested saved image width in pixels (default: 1920) "
+             "(env: GREENHOUSE_IMAGE_WIDTH)"
+    )
+    parser.add_argument(
+        "--image-height",
+        type=positive_int,
+        default=env_or_default("GREENHOUSE_IMAGE_HEIGHT", 1080, positive_int),
+        help="Requested saved image height in pixels (default: 1080) "
+             "(env: GREENHOUSE_IMAGE_HEIGHT)"
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=jpeg_quality,
+        metavar="0-100",
+        default=env_or_default("GREENHOUSE_JPEG_QUALITY", 95, jpeg_quality),
+        help="Saved JPEG quality from 0 to 100 (default: 95) "
+             "(env: GREENHOUSE_JPEG_QUALITY)"
     )
     parser.add_argument(
         "--optical-usb-id",
@@ -986,7 +1060,10 @@ def main():
         output_dir=output_dir,
         ble_interval=args.ble_interval,
         camera_interval=args.camera_interval,
-        image_capture_interval=args.image_capture_interval
+        image_capture_cron=args.image_capture_cron,
+        image_width=args.image_width,
+        image_height=args.image_height,
+        jpeg_quality=args.jpeg_quality
     )
     
     # Setup graceful shutdown
@@ -1014,12 +1091,14 @@ def main():
     
     logger.info("Starting Greenhouse Monitor...")
     logger.info(f"BLE interval: {args.ble_interval}s, Camera interval: {args.camera_interval}s")
-    if args.image_capture_interval == 0:
-        logger.info(f"Image capture interval: {args.camera_interval}s (same as camera)")
-    elif args.image_capture_interval < 0:
+    if not args.image_capture_cron:
         logger.info("Image capture: disabled (metrics only)")
     else:
-        logger.info(f"Image capture interval: {args.image_capture_interval}s")
+        logger.info(f"Image capture cron schedule: {args.image_capture_cron} (local time)")
+    logger.info(
+        f"Saved image settings: {args.image_width}x{args.image_height}, "
+        f"JPEG quality {args.jpeg_quality}"
+    )
     
     try:
         asyncio.run(run_with_shutdown())

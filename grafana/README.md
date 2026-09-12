@@ -23,7 +23,9 @@ proxy to the consumer's loopback listener. Change that value in
 `dashboards/climate.json` if clients use a different Tailscale DNS name. The
 dashboard refresh timestamp is appended to the URL so each Grafana refresh
 fetches the current image. Infinity is not required because the browser loads
-the JPEG directly.
+the JPEG directly. The dashboard preview is capped at 480 pixels high to match
+the former capture size, with a link below it that opens the full-resolution
+image directly from the API host.
 
 The node-scoped proxy was configured with:
 

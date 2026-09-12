@@ -66,7 +66,10 @@ GREENHOUSE_BLE_INTERVAL=60
 
 # Camera Settings
 GREENHOUSE_CAMERA_INTERVAL=300
-GREENHOUSE_IMAGE_CAPTURE_INTERVAL=3600  # Save images hourly
+GREENHOUSE_IMAGE_CAPTURE_CRON="0 9,15 * * *"  # Save at 09:00 and 15:00 local time
+GREENHOUSE_IMAGE_WIDTH=1920
+GREENHOUSE_IMAGE_HEIGHT=1080
+GREENHOUSE_JPEG_QUALITY=95
 
 # USB Device IDs (find with: lsusb -t)
 GREENHOUSE_OPTICAL_USB_ID=1-1.1.4
@@ -89,7 +92,10 @@ GREENHOUSE_MQTT_BASE_TOPIC=greenhouse
 | `GREENHOUSE_BLE_ADDRESSES` | `--ble-addresses` | (none) | Comma-separated BLE MAC addresses |
 | `GREENHOUSE_BLE_INTERVAL` | `--ble-interval` | 60 | Seconds between BLE polls (0 = disable) |
 | `GREENHOUSE_CAMERA_INTERVAL` | `--camera-interval` | 300 | Seconds between camera metric captures |
-| `GREENHOUSE_IMAGE_CAPTURE_INTERVAL` | `--image-capture-interval` | 0 | Image save interval (0 = same as camera, -1 = disabled) |
+| `GREENHOUSE_IMAGE_CAPTURE_CRON` | `--image-capture-cron` | `0 9,15 * * *` | Five-field image schedule in local time (empty = disabled) |
+| `GREENHOUSE_IMAGE_WIDTH` | `--image-width` | 1920 | Requested saved image width in pixels |
+| `GREENHOUSE_IMAGE_HEIGHT` | `--image-height` | 1080 | Requested saved image height in pixels |
+| `GREENHOUSE_JPEG_QUALITY` | `--jpeg-quality` | 95 | Saved JPEG quality (0-100) |
 | `GREENHOUSE_OPTICAL_USB_ID` | `--optical-usb-id` | 1-1.1.4 | USB device ID for optical camera |
 | `GREENHOUSE_OUTPUT_DIR` | `--output-dir` | . | Directory for saved images |
 | `GREENHOUSE_MQTT_HOST` | `--mqtt-host` | (none) | MQTT broker address |
@@ -98,6 +104,10 @@ GREENHOUSE_MQTT_BASE_TOPIC=greenhouse
 | `GREENHOUSE_MQTT_PASS` | `--mqtt-pass` | (none) | MQTT password |
 | `GREENHOUSE_MQTT_BASE_TOPIC` | `--mqtt-base-topic` | greenhouse | MQTT topic prefix |
 | `GREENHOUSE_DEBUG` | `--debug` | false | Enable debug logging |
+
+Image cron schedules use the host's local timezone. The camera loop evaluates the
+schedule at each metrics capture, so an image may be recorded up to one
+`GREENHOUSE_CAMERA_INTERVAL` after its scheduled time.
 
 ### Finding USB Device IDs
 
@@ -259,13 +269,14 @@ The optical camera is bound before each capture and automatically unbound afterw
 ### CPU
 
 - Idle: < 1%
-- During capture: 10-30% (one core)
+- During metrics capture: 10-30% (one core)
+- During high-resolution image capture: camera- and resolution-dependent
 - BLE polling: < 5%
 
 ### Disk I/O
 
-- Images: ~50-100 KB each (JPEG)
-- Configurable via `--image-capture-interval`
+- Image size depends on resolution, scene detail, and JPEG quality
+- Capture times are configurable via `--image-capture-cron`
 - Automatic cleanup available via cron (see install script)
 
 ## Troubleshooting
