@@ -17,7 +17,7 @@ Packages are written to `dist/`. The builder requires `bash` and `dpkg-deb`; it 
 Install or upgrade on the Raspberry Pi with:
 
 ```bash
-sudo apt install ./greenhouse-monitor_1.5.0-6_all.deb
+sudo apt install ./greenhouse-monitor_1.5.0-7_all.deb
 ```
 
 The package preserves `/etc/greenhouse/greenhouse.env` during upgrades. Its post-install script recreates `/opt/greenhouse/venv`, installs the Python dependencies, enables the systemd unit, and restarts the service. Network access is therefore required during package configuration.

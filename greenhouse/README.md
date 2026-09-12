@@ -38,7 +38,7 @@ bash packaging/build-deb.sh
 Copy the resulting package from `dist/` to the Raspberry Pi and install it:
 
 ```bash
-sudo apt install ./greenhouse-monitor_1.5.0-6_all.deb
+sudo apt install ./greenhouse-monitor_1.5.0-7_all.deb
 ```
 
 The package installs the application under `/opt/greenhouse`, preserves the configuration at `/etc/greenhouse/greenhouse.env` during upgrades, and enables and restarts the systemd service. Network access is required during installation so the package can populate its Python virtual environment.
@@ -71,6 +71,18 @@ GREENHOUSE_IMAGE_WIDTH=1920
 GREENHOUSE_IMAGE_HEIGHT=1080
 GREENHOUSE_JPEG_QUALITY=95
 
+# Optional tuning (blank values preserve camera defaults)
+GREENHOUSE_CAMERA_PIXEL_FORMAT=YUYV
+GREENHOUSE_CAMERA_POWER_LINE_FREQUENCY=60
+GREENHOUSE_CAMERA_AUTO_WHITE_BALANCE=false
+GREENHOUSE_CAMERA_WHITE_BALANCE_TEMPERATURE=5000
+GREENHOUSE_CAMERA_AUTO_EXPOSURE=false
+GREENHOUSE_CAMERA_EXPOSURE_TIME=200
+GREENHOUSE_CAMERA_GAIN=0
+GREENHOUSE_CAMERA_SHARPNESS=3
+GREENHOUSE_CAMERA_WARMUP_FRAMES=20
+GREENHOUSE_CAMERA_WARMUP_DELAY=0.1
+
 # USB Device IDs (find with: lsusb -t)
 GREENHOUSE_OPTICAL_USB_ID=1-1.1.4
 
@@ -96,6 +108,23 @@ GREENHOUSE_MQTT_BASE_TOPIC=greenhouse
 | `GREENHOUSE_IMAGE_WIDTH` | `--image-width` | 1920 | Requested saved image width in pixels |
 | `GREENHOUSE_IMAGE_HEIGHT` | `--image-height` | 1080 | Requested saved image height in pixels |
 | `GREENHOUSE_JPEG_QUALITY` | `--jpeg-quality` | 95 | Saved JPEG quality (0-100) |
+| `GREENHOUSE_CAMERA_PIXEL_FORMAT` | `--camera-pixel-format` | auto | Pixel format: `auto`, `YUYV`, or `MJPG` |
+| `GREENHOUSE_CAMERA_BRIGHTNESS` | `--camera-brightness` | device default | Brightness (-64 to 64) |
+| `GREENHOUSE_CAMERA_CONTRAST` | `--camera-contrast` | device default | Contrast (0 to 64) |
+| `GREENHOUSE_CAMERA_SATURATION` | `--camera-saturation` | device default | Saturation (0 to 128) |
+| `GREENHOUSE_CAMERA_HUE` | `--camera-hue` | device default | Hue (-40 to 40) |
+| `GREENHOUSE_CAMERA_AUTO_WHITE_BALANCE` | `--camera-auto-white-balance` | device default | Automatic white balance (`true`/`false`) |
+| `GREENHOUSE_CAMERA_WHITE_BALANCE_TEMPERATURE` | `--camera-white-balance-temperature` | device default | Manual white balance in Kelvin (2800 to 6500) |
+| `GREENHOUSE_CAMERA_GAMMA` | `--camera-gamma` | device default | Gamma (72 to 500) |
+| `GREENHOUSE_CAMERA_GAIN` | `--camera-gain` | device default | Sensor gain (0 to 100) |
+| `GREENHOUSE_CAMERA_POWER_LINE_FREQUENCY` | `--camera-power-line-frequency` | device default | Anti-flicker mode: `disabled`, `50`, or `60` |
+| `GREENHOUSE_CAMERA_SHARPNESS` | `--camera-sharpness` | device default | Sharpness (0 to 6) |
+| `GREENHOUSE_CAMERA_BACKLIGHT_COMPENSATION` | `--camera-backlight-compensation` | device default | Backlight compensation (0 to 192) |
+| `GREENHOUSE_CAMERA_AUTO_EXPOSURE` | `--camera-auto-exposure` | device default | Automatic exposure (`true`/`false`) |
+| `GREENHOUSE_CAMERA_EXPOSURE_TIME` | `--camera-exposure-time` | device default | Manual exposure in 100-microsecond units (1 to 5000) |
+| `GREENHOUSE_CAMERA_DYNAMIC_FRAMERATE` | `--camera-dynamic-framerate` | device default | Let exposure reduce frame rate (`true`/`false`) |
+| `GREENHOUSE_CAMERA_WARMUP_FRAMES` | `--camera-warmup-frames` | 5 | Frames discarded before capture |
+| `GREENHOUSE_CAMERA_WARMUP_DELAY` | `--camera-warmup-delay` | 0.1 | Delay between warm-up frames in seconds |
 | `GREENHOUSE_OPTICAL_USB_ID` | `--optical-usb-id` | 1-1.1.4 | USB device ID for optical camera |
 | `GREENHOUSE_OUTPUT_DIR` | `--output-dir` | . | Directory for saved images |
 | `GREENHOUSE_MQTT_HOST` | `--mqtt-host` | (none) | MQTT broker address |
@@ -108,6 +137,13 @@ GREENHOUSE_MQTT_BASE_TOPIC=greenhouse
 Image cron schedules use the host's local timezone. The camera loop evaluates the
 schedule at each metrics capture, so an image may be recorded up to one
 `GREENHOUSE_CAMERA_INTERVAL` after its scheduled time.
+
+Camera control ranges are device-specific; the documented ranges match the
+Innomaker U20CAM-720P. Setting a manual white balance temperature or exposure
+implicitly selects manual mode unless its corresponding automatic setting is
+explicitly `true`, which is rejected as a configuration error. Longer warm-up
+periods allow automatic exposure and white balance more time to settle after
+the USB camera is rebound.
 
 ### Finding USB Device IDs
 
@@ -199,6 +235,16 @@ sudo journalctl -u greenhouse-monitor -f
 
 # View recent logs
 sudo journalctl -u greenhouse-monitor --since "1 hour ago"
+```
+
+### Capture an Image Now
+
+Send `SIGHUP` to request one full-quality image without changing the cron
+schedule. The request wakes the camera loop and uses the configured resolution,
+JPEG quality, tuning controls, and output directory:
+
+```bash
+sudo systemctl kill --signal=HUP greenhouse-monitor
 ```
 
 ### Manual Testing

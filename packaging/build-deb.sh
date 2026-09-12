@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")}"
-REVISION="${2:-6}"
+REVISION="${2:-7}"
 PACKAGE_NAME="greenhouse-monitor"
 PACKAGE_VERSION="${VERSION}-${REVISION}"
 BUILD_ROOT="${ROOT_DIR}/build/debian"
@@ -74,7 +74,7 @@ Version: ${PACKAGE_VERSION}
 Architecture: all
 Maintainer: James Ooo
 Installed-Size: ${INSTALLED_SIZE}
-Depends: python3 (>= 3.11), python3-venv, python3-pip, ca-certificates
+Depends: python3 (>= 3.11), python3-venv, python3-pip, ca-certificates, v4l-utils
 Section: misc
 Priority: optional
 Description: BLE and optical camera greenhouse monitoring service

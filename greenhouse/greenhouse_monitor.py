@@ -113,6 +113,69 @@ class LightMetrics:
     dark_pixel_ratio: float
 
 
+@dataclass(frozen=True)
+class CameraTuning:
+    """Optional V4L2 image controls and capture warm-up behavior."""
+    pixel_format: Optional[str] = None
+    brightness: Optional[int] = None
+    contrast: Optional[int] = None
+    saturation: Optional[int] = None
+    hue: Optional[int] = None
+    auto_white_balance: Optional[bool] = None
+    white_balance_temperature: Optional[int] = None
+    gamma: Optional[int] = None
+    gain: Optional[int] = None
+    power_line_frequency: Optional[int] = None
+    sharpness: Optional[int] = None
+    backlight_compensation: Optional[int] = None
+    auto_exposure: Optional[bool] = None
+    exposure_time: Optional[int] = None
+    dynamic_framerate: Optional[bool] = None
+    warmup_frames: int = 5
+    warmup_delay: float = 0.1
+
+    def v4l2_controls(self) -> dict[str, int]:
+        if self.auto_white_balance is True and self.white_balance_temperature is not None:
+            raise ValueError(
+                "manual white balance temperature requires auto white balance to be disabled"
+            )
+        if self.auto_exposure is True and self.exposure_time is not None:
+            raise ValueError("manual exposure time requires auto exposure to be disabled")
+
+        controls: dict[str, int] = {}
+        direct_controls = {
+            "brightness": self.brightness,
+            "contrast": self.contrast,
+            "saturation": self.saturation,
+            "hue": self.hue,
+            "gamma": self.gamma,
+            "gain": self.gain,
+            "power_line_frequency": self.power_line_frequency,
+            "sharpness": self.sharpness,
+            "backlight_compensation": self.backlight_compensation,
+            "exposure_dynamic_framerate": (
+                int(self.dynamic_framerate)
+                if self.dynamic_framerate is not None else None
+            ),
+        }
+        controls.update(
+            (name, value) for name, value in direct_controls.items() if value is not None
+        )
+
+        if self.auto_white_balance is not None:
+            controls["white_balance_automatic"] = int(self.auto_white_balance)
+        if self.white_balance_temperature is not None:
+            controls.setdefault("white_balance_automatic", 0)
+            controls["white_balance_temperature"] = self.white_balance_temperature
+        if self.auto_exposure is not None:
+            controls["auto_exposure"] = 3 if self.auto_exposure else 1
+        if self.exposure_time is not None:
+            controls.setdefault("auto_exposure", 1)
+            controls["exposure_time_absolute"] = self.exposure_time
+
+        return controls
+
+
 # -----------------------------------------------------------------------------
 # Circuit Breaker for Fault Isolation
 # -----------------------------------------------------------------------------
@@ -474,6 +537,22 @@ async def poll_ble_sensor(address: str, timeout: float = 5.0) -> Optional[Climat
 # Optical Camera & Light Measurement
 # -----------------------------------------------------------------------------
 
+def apply_camera_tuning(tuning: CameraTuning, device: str = "/dev/video0") -> None:
+    """Apply configured controls using their native V4L2 names and values."""
+    controls = tuning.v4l2_controls()
+    if not controls:
+        return
+
+    setting = ",".join(f"{name}={value}" for name, value in controls.items())
+    subprocess.run(
+        ["v4l2-ctl", "--device", device, "--set-ctrl", setting],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    logger.info(f"Applied camera controls: {setting}")
+
+
 def capture_optical_with_light_metrics(
     output_dir: str,
     bright_thresh: int = 220,
@@ -481,7 +560,8 @@ def capture_optical_with_light_metrics(
     save_image: bool = True,
     image_width: int = 1920,
     image_height: int = 1080,
-    jpeg_quality: int = 95
+    jpeg_quality: int = 95,
+    camera_tuning: Optional[CameraTuning] = None
 ) -> Tuple[Optional[str], Optional[LightMetrics]]:
     """
     Capture optical image and compute light metrics.
@@ -495,11 +575,15 @@ def capture_optical_with_light_metrics(
         image_width: Requested width for saved images
         image_height: Requested height for saved images
         jpeg_quality: JPEG encoding quality from 0 to 100
+        camera_tuning: Optional camera controls and warm-up behavior
     
     Memory-optimized: processes image in-place, releases resources immediately.
     """
     cap = None
+    tuning = camera_tuning or CameraTuning()
     try:
+        apply_camera_tuning(tuning)
+
         # Use V4L2 backend for Linux
         cap = cv.VideoCapture(0, cv.CAP_V4L2)
         if not cap.isOpened():
@@ -509,14 +593,20 @@ def capture_optical_with_light_metrics(
         # Metrics-only captures stay small; archival captures use the configured size.
         capture_width = image_width if save_image else 640
         capture_height = image_height if save_image else 480
+        if tuning.pixel_format:
+            cap.set(
+                cv.CAP_PROP_FOURCC,
+                cv.VideoWriter_fourcc(*tuning.pixel_format),
+            )
         cap.set(cv.CAP_PROP_FRAME_WIDTH, capture_width)
         cap.set(cv.CAP_PROP_FRAME_HEIGHT, capture_height)
         cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
         
         # Flush buffer (exposure/white balance adjustment)
-        for _ in range(5):
+        for _ in range(tuning.warmup_frames):
             cap.read()
-            time.sleep(0.1)
+            if tuning.warmup_delay:
+                time.sleep(tuning.warmup_delay)
         
         ret, frame = cap.read()
         if not ret or frame is None:
@@ -589,7 +679,8 @@ class GreenhouseMonitor:
         image_capture_cron: str = "0 9,15 * * *",
         image_width: int = 1920,
         image_height: int = 1080,
-        jpeg_quality: int = 95
+        jpeg_quality: int = 95,
+        camera_tuning: Optional[CameraTuning] = None
     ):
         self.ble_addresses = ble_addresses
         self.mqtt = mqtt_publisher
@@ -600,6 +691,7 @@ class GreenhouseMonitor:
         self.image_width = image_width
         self.image_height = image_height
         self.jpeg_quality = jpeg_quality
+        self.camera_tuning = camera_tuning or CameraTuning()
         self.image_capture_cron = image_capture_cron
         self._next_image_capture = (
             croniter(image_capture_cron, datetime.now()).get_next(datetime)
@@ -609,6 +701,7 @@ class GreenhouseMonitor:
         # Single thread for camera operations (memory efficient)
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._running = True
+        self._image_capture_requested = asyncio.Event()
         
         # Circuit breakers for each component (3 failures = 5 min cooldown)
         self.circuit_breakers = {
@@ -692,18 +785,28 @@ class GreenhouseMonitor:
         
         while self._running:
             start_time = time.monotonic()
+            manual_capture_requested = self._image_capture_requested.is_set()
+            if manual_capture_requested:
+                self._image_capture_requested.clear()
             
             # Check circuit breaker
-            if not await cb.attempt():
+            if not manual_capture_requested and not await cb.attempt():
                 logger.debug("Optical camera: circuit breaker open, skipping")
-                await asyncio.sleep(self.camera_interval)
+                try:
+                    await asyncio.wait_for(
+                        self._image_capture_requested.wait(),
+                        timeout=self.camera_interval,
+                    )
+                except asyncio.TimeoutError:
+                    pass
                 continue
             
             # Determine if we should save an image this cycle
-            should_save_image = (
+            scheduled_capture_due = (
                 self._next_image_capture is not None
                 and datetime.now() >= self._next_image_capture
             )
+            should_save_image = manual_capture_requested or scheduled_capture_due
             
             try:
                 logger.info("Acquiring exclusive optical camera access...")
@@ -719,7 +822,8 @@ class GreenhouseMonitor:
                                     save_image=should_save_image,
                                     image_width=self.image_width,
                                     image_height=self.image_height,
-                                    jpeg_quality=self.jpeg_quality
+                                    jpeg_quality=self.jpeg_quality,
+                                    camera_tuning=self.camera_tuning
                                 )
                             ),
                             timeout=self.optical_capture_timeout
@@ -734,8 +838,8 @@ class GreenhouseMonitor:
                                 self.mqtt.publish_light(light_metrics)
                             await cb.record_success()
                             
-                            # Advance the schedule only after a successful image save
-                            if image_path:
+                            # Manual captures do not change the next scheduled capture.
+                            if image_path and scheduled_capture_due:
                                 self._next_image_capture = croniter(
                                     self.image_capture_cron, datetime.now()
                                 ).get_next(datetime)
@@ -763,7 +867,13 @@ class GreenhouseMonitor:
             # Sleep for remaining interval
             elapsed = time.monotonic() - start_time
             sleep_time = max(0, self.camera_interval - elapsed)
-            await asyncio.sleep(sleep_time)
+            try:
+                await asyncio.wait_for(
+                    self._image_capture_requested.wait(),
+                    timeout=sleep_time,
+                )
+            except asyncio.TimeoutError:
+                pass
     
     async def run(self):
         """
@@ -822,6 +932,11 @@ class GreenhouseMonitor:
         """Signal all loops to stop"""
         self._running = False
 
+    def request_image_capture(self):
+        """Request an immediate archival image from the camera loop."""
+        logger.info("Immediate image capture requested")
+        self._image_capture_requested.set()
+
 
 # -----------------------------------------------------------------------------
 # CLI Entry Point
@@ -837,12 +952,73 @@ def env_or_default(env_var: str, default, cast_type=str):
     return cast_type(val)
 
 
+def optional_env(env_var: str, cast_type):
+    """Get an optional environment value, treating blank as unset."""
+    value = os.environ.get(env_var)
+    if value is None or not value.strip():
+        return None
+    return cast_type(value)
+
+
 def positive_int(value: str) -> int:
     """Parse a positive integer for pixel dimensions."""
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
     return parsed
+
+
+def nonnegative_int(value: str) -> int:
+    """Parse a nonnegative integer."""
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
+    return parsed
+
+
+def bounded_int(value: str, minimum: int, maximum: int) -> int:
+    """Parse an integer constrained to an inclusive range."""
+    parsed = int(value)
+    if not minimum <= parsed <= maximum:
+        raise argparse.ArgumentTypeError(f"must be between {minimum} and {maximum}")
+    return parsed
+
+
+def nonnegative_float(value: str) -> float:
+    """Parse a nonnegative floating-point value."""
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
+    return parsed
+
+
+def boolean_value(value: str) -> bool:
+    """Parse an explicit boolean option."""
+    normalized = value.strip().lower()
+    if normalized in ("true", "1", "yes", "on"):
+        return True
+    if normalized in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError("must be true or false")
+
+
+def pixel_format(value: str) -> Optional[str]:
+    """Parse an optional camera pixel format."""
+    normalized = value.strip().upper()
+    if normalized in ("", "AUTO"):
+        return None
+    if normalized not in ("YUYV", "MJPG"):
+        raise argparse.ArgumentTypeError("must be auto, YUYV, or MJPG")
+    return normalized
+
+
+def power_line_frequency(value: str) -> int:
+    """Map a mains frequency label to the V4L2 menu value."""
+    frequencies = {"disabled": 0, "0": 0, "50": 1, "60": 2}
+    normalized = value.strip().lower()
+    if normalized not in frequencies:
+        raise argparse.ArgumentTypeError("must be disabled, 50, or 60")
+    return frequencies[normalized]
 
 
 def jpeg_quality(value: str) -> int:
@@ -875,6 +1051,8 @@ Environment Variables:
     GREENHOUSE_IMAGE_WIDTH       - Requested saved image width in pixels
     GREENHOUSE_IMAGE_HEIGHT      - Requested saved image height in pixels
     GREENHOUSE_JPEG_QUALITY      - Saved JPEG quality (0-100)
+    GREENHOUSE_CAMERA_PIXEL_FORMAT - Camera format (auto, YUYV, or MJPG)
+    GREENHOUSE_CAMERA_*          - Optional camera tuning controls; see --help
     GREENHOUSE_OPTICAL_USB_ID    - USB ID for optical camera
     GREENHOUSE_OUTPUT_DIR        - Directory to save captured images
     GREENHOUSE_MQTT_HOST         - MQTT broker address
@@ -952,6 +1130,152 @@ Examples:
              "(env: GREENHOUSE_JPEG_QUALITY)"
     )
     parser.add_argument(
+        "--camera-pixel-format",
+        type=pixel_format,
+        default=optional_env("GREENHOUSE_CAMERA_PIXEL_FORMAT", pixel_format),
+        help="Camera pixel format: auto, YUYV, or MJPG (default: auto) "
+             "(env: GREENHOUSE_CAMERA_PIXEL_FORMAT)"
+    )
+    parser.add_argument(
+        "--camera-brightness",
+        type=functools.partial(bounded_int, minimum=-64, maximum=64),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_BRIGHTNESS",
+            functools.partial(bounded_int, minimum=-64, maximum=64),
+        ),
+        help="Camera brightness from -64 to 64 (env: GREENHOUSE_CAMERA_BRIGHTNESS)"
+    )
+    parser.add_argument(
+        "--camera-contrast",
+        type=functools.partial(bounded_int, minimum=0, maximum=64),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_CONTRAST",
+            functools.partial(bounded_int, minimum=0, maximum=64),
+        ),
+        help="Camera contrast from 0 to 64 (env: GREENHOUSE_CAMERA_CONTRAST)"
+    )
+    parser.add_argument(
+        "--camera-saturation",
+        type=functools.partial(bounded_int, minimum=0, maximum=128),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_SATURATION",
+            functools.partial(bounded_int, minimum=0, maximum=128),
+        ),
+        help="Camera saturation from 0 to 128 (env: GREENHOUSE_CAMERA_SATURATION)"
+    )
+    parser.add_argument(
+        "--camera-hue",
+        type=functools.partial(bounded_int, minimum=-40, maximum=40),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_HUE",
+            functools.partial(bounded_int, minimum=-40, maximum=40),
+        ),
+        help="Camera hue from -40 to 40 (env: GREENHOUSE_CAMERA_HUE)"
+    )
+    parser.add_argument(
+        "--camera-auto-white-balance",
+        type=boolean_value,
+        default=optional_env("GREENHOUSE_CAMERA_AUTO_WHITE_BALANCE", boolean_value),
+        help="Enable automatic white balance (true/false) "
+             "(env: GREENHOUSE_CAMERA_AUTO_WHITE_BALANCE)"
+    )
+    parser.add_argument(
+        "--camera-white-balance-temperature",
+        type=functools.partial(bounded_int, minimum=2800, maximum=6500),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_WHITE_BALANCE_TEMPERATURE",
+            functools.partial(bounded_int, minimum=2800, maximum=6500),
+        ),
+        help="Manual white balance in Kelvin from 2800 to 6500 "
+             "(env: GREENHOUSE_CAMERA_WHITE_BALANCE_TEMPERATURE)"
+    )
+    parser.add_argument(
+        "--camera-gamma",
+        type=functools.partial(bounded_int, minimum=72, maximum=500),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_GAMMA",
+            functools.partial(bounded_int, minimum=72, maximum=500),
+        ),
+        help="Camera gamma from 72 to 500 (env: GREENHOUSE_CAMERA_GAMMA)"
+    )
+    parser.add_argument(
+        "--camera-gain",
+        type=functools.partial(bounded_int, minimum=0, maximum=100),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_GAIN",
+            functools.partial(bounded_int, minimum=0, maximum=100),
+        ),
+        help="Camera gain from 0 to 100 (env: GREENHOUSE_CAMERA_GAIN)"
+    )
+    parser.add_argument(
+        "--camera-power-line-frequency",
+        type=power_line_frequency,
+        metavar="disabled|50|60",
+        default=optional_env(
+            "GREENHOUSE_CAMERA_POWER_LINE_FREQUENCY",
+            power_line_frequency,
+        ),
+        help="Anti-flicker mains frequency "
+             "(env: GREENHOUSE_CAMERA_POWER_LINE_FREQUENCY)"
+    )
+    parser.add_argument(
+        "--camera-sharpness",
+        type=functools.partial(bounded_int, minimum=0, maximum=6),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_SHARPNESS",
+            functools.partial(bounded_int, minimum=0, maximum=6),
+        ),
+        help="Camera sharpness from 0 to 6 (env: GREENHOUSE_CAMERA_SHARPNESS)"
+    )
+    parser.add_argument(
+        "--camera-backlight-compensation",
+        type=functools.partial(bounded_int, minimum=0, maximum=192),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_BACKLIGHT_COMPENSATION",
+            functools.partial(bounded_int, minimum=0, maximum=192),
+        ),
+        help="Backlight compensation from 0 to 192 "
+             "(env: GREENHOUSE_CAMERA_BACKLIGHT_COMPENSATION)"
+    )
+    parser.add_argument(
+        "--camera-auto-exposure",
+        type=boolean_value,
+        default=optional_env("GREENHOUSE_CAMERA_AUTO_EXPOSURE", boolean_value),
+        help="Enable automatic exposure (true/false) "
+             "(env: GREENHOUSE_CAMERA_AUTO_EXPOSURE)"
+    )
+    parser.add_argument(
+        "--camera-exposure-time",
+        type=functools.partial(bounded_int, minimum=1, maximum=5000),
+        default=optional_env(
+            "GREENHOUSE_CAMERA_EXPOSURE_TIME",
+            functools.partial(bounded_int, minimum=1, maximum=5000),
+        ),
+        help="Manual exposure in 100 microsecond units from 1 to 5000 "
+             "(env: GREENHOUSE_CAMERA_EXPOSURE_TIME)"
+    )
+    parser.add_argument(
+        "--camera-dynamic-framerate",
+        type=boolean_value,
+        default=optional_env("GREENHOUSE_CAMERA_DYNAMIC_FRAMERATE", boolean_value),
+        help="Allow exposure to reduce frame rate (true/false) "
+             "(env: GREENHOUSE_CAMERA_DYNAMIC_FRAMERATE)"
+    )
+    parser.add_argument(
+        "--camera-warmup-frames",
+        type=nonnegative_int,
+        default=env_or_default("GREENHOUSE_CAMERA_WARMUP_FRAMES", 5, nonnegative_int),
+        help="Frames discarded before capture (default: 5) "
+             "(env: GREENHOUSE_CAMERA_WARMUP_FRAMES)"
+    )
+    parser.add_argument(
+        "--camera-warmup-delay",
+        type=nonnegative_float,
+        default=env_or_default("GREENHOUSE_CAMERA_WARMUP_DELAY", 0.1, nonnegative_float),
+        help="Delay between warm-up frames in seconds (default: 0.1) "
+             "(env: GREENHOUSE_CAMERA_WARMUP_DELAY)"
+    )
+    parser.add_argument(
         "--optical-usb-id",
         default=env_or_default("GREENHOUSE_OPTICAL_USB_ID", DEFAULT_OPTICAL_USB_ID),
         help=f"USB ID for optical camera (default: {DEFAULT_OPTICAL_USB_ID}) "
@@ -1002,7 +1326,18 @@ Examples:
         help="Enable debug logging (env: GREENHOUSE_DEBUG)"
     )
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    if (
+        args.camera_auto_white_balance is True
+        and args.camera_white_balance_temperature is not None
+    ):
+        parser.error(
+            "--camera-white-balance-temperature requires automatic white balance "
+            "to be disabled"
+        )
+    if args.camera_auto_exposure is True and args.camera_exposure_time is not None:
+        parser.error("--camera-exposure-time requires automatic exposure to be disabled")
+    return args
 
 
 def main():
@@ -1051,6 +1386,25 @@ def main():
     
     # Setup USB manager
     usb_manager = USBDeviceManager(args.optical_usb_id)
+    camera_tuning = CameraTuning(
+        pixel_format=args.camera_pixel_format,
+        brightness=args.camera_brightness,
+        contrast=args.camera_contrast,
+        saturation=args.camera_saturation,
+        hue=args.camera_hue,
+        auto_white_balance=args.camera_auto_white_balance,
+        white_balance_temperature=args.camera_white_balance_temperature,
+        gamma=args.camera_gamma,
+        gain=args.camera_gain,
+        power_line_frequency=args.camera_power_line_frequency,
+        sharpness=args.camera_sharpness,
+        backlight_compensation=args.camera_backlight_compensation,
+        auto_exposure=args.camera_auto_exposure,
+        exposure_time=args.camera_exposure_time,
+        dynamic_framerate=args.camera_dynamic_framerate,
+        warmup_frames=args.camera_warmup_frames,
+        warmup_delay=args.camera_warmup_delay,
+    )
     
     # Create monitor
     monitor = GreenhouseMonitor(
@@ -1063,7 +1417,8 @@ def main():
         image_capture_cron=args.image_capture_cron,
         image_width=args.image_width,
         image_height=args.image_height,
-        jpeg_quality=args.jpeg_quality
+        jpeg_quality=args.jpeg_quality,
+        camera_tuning=camera_tuning
     )
     
     # Setup graceful shutdown
@@ -1071,13 +1426,14 @@ def main():
         loop = asyncio.get_event_loop()
         main_task = asyncio.create_task(monitor.run())
         
-        def signal_handler():
+        def shutdown_signal_handler():
             logger.info("Shutdown signal received")
             monitor.stop()
             main_task.cancel()
         
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, signal_handler)
+            loop.add_signal_handler(sig, shutdown_signal_handler)
+        loop.add_signal_handler(signal.SIGHUP, monitor.request_image_capture)
         
         try:
             await main_task
@@ -1098,6 +1454,13 @@ def main():
     logger.info(
         f"Saved image settings: {args.image_width}x{args.image_height}, "
         f"JPEG quality {args.jpeg_quality}"
+    )
+    configured_controls = camera_tuning.v4l2_controls()
+    logger.info(
+        f"Camera tuning: pixel format={camera_tuning.pixel_format or 'auto'}, "
+        f"controls={configured_controls or 'device defaults'}, "
+        f"warm-up={camera_tuning.warmup_frames} frames at "
+        f"{camera_tuning.warmup_delay:g}s"
     )
     
     try:

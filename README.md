@@ -13,7 +13,7 @@ bash packaging/build-deb.sh
 The package is written to `dist/`. Install it, or upgrade an existing `greenhouse-monitor` package, with:
 
 ```bash
-sudo apt install ./dist/greenhouse-monitor_1.5.0-6_all.deb
+sudo apt install ./dist/greenhouse-monitor_1.5.0-7_all.deb
 ```
 
 The existing `/etc/greenhouse/greenhouse.env` is preserved during upgrades. Package configuration needs network access to install Python dependencies into `/opt/greenhouse/venv`.
