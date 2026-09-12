@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-1.0.0}"
-REVISION="${2:-3}"
+REVISION="${2:-4}"
 PACKAGE_NAME=greenhouse-datastore
 PACKAGE_VERSION="${VERSION}-${REVISION}"
 PACKAGE_ROOT="${ROOT_DIR}/build/consumer/${PACKAGE_NAME}_${PACKAGE_VERSION}_all"

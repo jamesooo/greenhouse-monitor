@@ -10,6 +10,30 @@
   "panels": [
     {
       "datasource": {
+        "type": "datasource",
+        "uid": "grafana"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<div style=\"height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden\"><img src=\"${image_api_url}?t=${__to}\" alt=\"Latest greenhouse capture\" style=\"display:block;max-width:100%;max-height:100%;object-fit:contain\"></div>",
+        "mode": "html"
+      },
+      "title": "Latest Greenhouse Image",
+      "type": "text"
+    },
+    {
+      "datasource": {
         "type": "postgres",
         "uid": "greenhouse-postgres"
       },
@@ -32,9 +56,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
+        "h": 12,
+        "w": 12,
+        "x": 12,
         "y": 0
       },
       "id": 1,
@@ -92,10 +116,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 9,
-        "w": 24,
+        "h": 12,
+        "w": 12,
         "x": 0,
-        "y": 9
+        "y": 12
       },
       "id": 2,
       "options": {
@@ -152,10 +176,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 18
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 12
       },
       "id": 3,
       "options": {
@@ -191,7 +215,21 @@
   "schemaVersion": 41,
   "tags": ["greenhouse", "climate"],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "https://datastore.tail63be5a.ts.net/",
+          "value": "https://datastore.tail63be5a.ts.net/"
+        },
+        "hide": 2,
+        "label": "Image API URL",
+        "name": "image_api_url",
+        "query": "https://datastore.tail63be5a.ts.net/",
+        "skipUrlSync": true,
+        "type": "constant"
+      }
+    ]
   },
   "time": {
     "from": "now-7d",

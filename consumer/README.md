@@ -1,7 +1,8 @@
 # Greenhouse Datastore
 
 `greenhouse-datastore` subscribes to the producer's climate and light MQTT
-topics and stores readings in PostgreSQL TimescaleDB hypertables.
+topics and stores readings in PostgreSQL TimescaleDB hypertables. It also
+serves the newest optical capture as a JPEG from `GET /`.
 
 ## Responsibilities
 
@@ -47,6 +48,17 @@ producer timestamps that do not contain an offset. The same file controls the
 three compaction and retention intervals described above using PostgreSQL
 interval syntax.
 
+The latest-image API is configured with:
+
+- `GREENHOUSE_IMAGE_API_HOST` (default `127.0.0.1`);
+- `GREENHOUSE_IMAGE_API_PORT` (packaged default `8080`); and
+- `GREENHOUSE_IMAGE_DIRECTORY` (default
+  `/mnt/datastore/greenhouse-captures`).
+
+Only `GET /` is exposed. It returns the newest `optical_*.jpg` as `image/jpeg`,
+or `404` when no capture is available. The deployed loopback listener is
+published to authenticated tailnet clients with Tailscale Serve.
+
 ## Debian Package
 
 Build from the repository root:
@@ -58,7 +70,7 @@ bash packaging/consumer/build-deb.sh
 Install with APT so operating-system dependencies are resolved:
 
 ```sh
-sudo apt install ./dist/greenhouse-datastore_1.0.0-2_all.deb
+sudo apt install ./dist/greenhouse-datastore_1.0.0-4_all.deb
 ```
 
 The package installs and enables `greenhouse-datastore.service`. Python

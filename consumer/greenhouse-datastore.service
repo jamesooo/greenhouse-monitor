@@ -25,6 +25,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
+ReadOnlyPaths=-/mnt/datastore/greenhouse-captures
 
 StandardOutput=journal
 StandardError=journal

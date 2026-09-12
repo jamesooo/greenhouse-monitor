@@ -3,11 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import signal
 from datetime import datetime
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from numbers import Real
+from pathlib import Path
+from threading import Thread
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
@@ -32,6 +38,60 @@ LIGHT_COLUMNS = (
     "bright_pixel_ratio",
     "dark_pixel_ratio",
 )
+
+
+class LatestImageServer:
+    def __init__(self, host: str, port: int, image_directory: Path):
+        self.image_directory = image_directory
+        handler = self._handler()
+        self.server = ThreadingHTTPServer((host, port), handler)
+        self.thread = Thread(
+            target=self.server.serve_forever,
+            name="latest-image-api",
+            daemon=True,
+        )
+
+    def _handler(self) -> type[BaseHTTPRequestHandler]:
+        image_directory = self.image_directory
+
+        class LatestImageHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if urlsplit(self.path).path != "/":
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+
+                try:
+                    latest_image = max(
+                        image_directory.glob("optical_*.jpg"),
+                        key=lambda path: path.stat().st_mtime_ns,
+                    )
+                    image = latest_image.open("rb")
+                except (OSError, ValueError):
+                    self.send_error(HTTPStatus.NOT_FOUND, "No image available")
+                    return
+
+                with image:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(os.fstat(image.fileno()).st_size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    shutil.copyfileobj(image, self.wfile)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                logger.info("Image API: " + format, *args)
+
+        return LatestImageHandler
+
+    def start(self) -> None:
+        self.thread.start()
+        host, port = self.server.server_address[:2]
+        logger.info("Latest-image API listening on http://%s:%s/", host, port)
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
 
 
 class ReadingStore:
@@ -214,10 +274,19 @@ class GreenhouseConsumer:
             "GREENHOUSE_HOURLY_RETENTION",
             "5 years",
         )
+        api_host = os.environ.get("GREENHOUSE_IMAGE_API_HOST", "127.0.0.1")
+        api_port = int(os.environ.get("GREENHOUSE_IMAGE_API_PORT", "8080"))
+        image_directory = Path(
+            os.environ.get(
+                "GREENHOUSE_IMAGE_DIRECTORY",
+                "/mnt/datastore/greenhouse-captures",
+            )
+        )
 
         self.host = host
         self.port = port
         self.topics = (f"{base_topic}/climate/+", f"{base_topic}/light")
+        self.image_server = LatestImageServer(api_host, api_port, image_directory)
         self.store = ReadingStore(
             dsn,
             source_timezone,
@@ -270,9 +339,11 @@ class GreenhouseConsumer:
         self.store.provision_schema()
         logger.info("Database schema is ready")
         self.client.connect(self.host, self.port, keepalive=60)
+        self.image_server.start()
         try:
             self.client.loop_forever(retry_first_connection=True)
         finally:
+            self.image_server.stop()
             self.store.close()
 
     def stop(self, signum: int, frame: Any) -> None:
