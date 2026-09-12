@@ -1,0 +1,2 @@
+paho-mqtt<3,>=2
+psycopg[binary]<4,>=3.1

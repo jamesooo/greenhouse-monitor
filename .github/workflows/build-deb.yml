@@ -1,0 +1,49 @@
+name: Build Debian package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (defaults to VERSION file)
+        required: false
+        type: string
+      revision:
+        description: Debian revision
+        required: false
+        default: "6"
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build package
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version }}
+          REVISION_OVERRIDE: ${{ inputs.revision }}
+        run: |
+          version="${VERSION_OVERRIDE:-$(tr -d '[:space:]' < VERSION)}"
+          revision="${REVISION_OVERRIDE:-6}"
+          bash packaging/build-deb.sh "$version" "$revision"
+
+      - name: Inspect package
+        run: |
+          package="$(find dist -maxdepth 1 -name '*.deb' -print -quit)"
+          dpkg-deb --info "$package"
+          dpkg-deb --contents "$package"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: greenhouse-monitor-deb
+          path: dist/*.deb
+          if-no-files-found: error

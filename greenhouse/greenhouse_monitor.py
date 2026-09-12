@@ -5,26 +5,23 @@ Unified Greenhouse Monitoring Script for Raspberry Pi Zero 2 W
 Combines:
 - BLE climate sensor monitoring (internal/external temp & humidity)
 - Optical camera capture with light level measurement
-- Thermal camera capture with canopy temperature measurement
 
 Optimizations for Pi Zero 2 W:
 - asyncio + ThreadPoolExecutor for efficient concurrency
-- USB cameras bound only during capture to limit bandwidth
+- USB camera bound only during capture
 - Memory-efficient image processing (process then discard)
 - Single MQTT client for all data streams
 
 MQTT Topics:
 - {base_topic}/climate/{address}  - BLE sensor data (temp/humidity)
 - {base_topic}/light              - Light metrics from optical camera
-- {base_topic}/canopy             - Canopy temperature from thermal camera
 
 Usage:
   python greenhouse_monitor.py --ble-addresses AA:BB:CC:DD:EE:FF,11:22:33:44:55:66 \
       --mqtt-host 192.168.1.100 --output-dir /home/pi/captures
 
 Dependencies:
-  pip install bleak paho-mqtt opencv-python numpy pyserial
-  # For thermal camera: senxor library must be installed
+    pip install bleak paho-mqtt opencv-python numpy
 """
 
 from __future__ import annotations
@@ -64,14 +61,6 @@ try:
 except ImportError:
     pass
 
-SENXOR_AVAILABLE = False
-try:
-    from senxor.mi48 import MI48
-    from senxor.utils import data_to_frame, remap, cv_filter, connect_senxor
-    SENXOR_AVAILABLE = True
-except ImportError:
-    pass
-
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
@@ -80,10 +69,9 @@ except ImportError:
 BLE_TRIGGER_CHAR = "0000fff5-0000-1000-8000-00805f9b34fb"
 BLE_NOTIFY_CHAR = "0000fff3-0000-1000-8000-00805f9b34fb"
 
-# USB device IDs - find these using 'lsusb -t'
-# These should be configured for your specific setup
+# USB device ID - find this using 'lsusb -t'
+# This should be configured for your specific setup
 DEFAULT_OPTICAL_USB_ID = "1-1.1.4"
-DEFAULT_THERMAL_USB_ID = "1-1.1.3"
 
 # Logging setup
 logging.basicConfig(
@@ -122,17 +110,6 @@ class LightMetrics:
     std: float
     bright_pixel_ratio: float
     dark_pixel_ratio: float
-
-
-@dataclass
-class CanopyMetrics:
-    """Canopy temperature metrics from thermal camera"""
-    timestamp: str
-    mean_temp: float         # Celsius
-    min_temp: float
-    max_temp: float
-    std_temp: float
-    median_temp: float
 
 
 # -----------------------------------------------------------------------------
@@ -245,21 +222,12 @@ class CircuitBreaker:
 # -----------------------------------------------------------------------------
 
 class USBDeviceManager:
-    """
-    Manages USB device binding/unbinding to limit bandwidth usage.
+    """Manages optical camera USB binding during capture."""
     
-    IMPORTANT: On Pi Zero 2 W, only ONE camera can be bound at a time due to
-    USB bandwidth limitations. This class enforces mutual exclusivity using
-    a semaphore that must be held for the entire duration of camera use.
-    """
-    
-    def __init__(self, optical_usb_id: str, thermal_usb_id: str):
+    def __init__(self, optical_usb_id: str):
         self.optical_usb_id = optical_usb_id
-        self.thermal_usb_id = thermal_usb_id
         self._lock = asyncio.Lock()  # For bind/unbind operations
-        self._camera_semaphore = asyncio.Semaphore(1)  # Only one camera at a time
         self._lock_timeout = 60  # Max seconds to wait for lock
-        self._current_camera: Optional[str] = None  # Track which camera is bound
     
     def _is_device_bound(self, usb_id: str) -> bool:
         """Check if a USB device is currently bound to a driver"""
@@ -303,41 +271,16 @@ class USBDeviceManager:
     
     @asynccontextmanager
     async def exclusive_optical(self):
-        """
-        Context manager for exclusive optical camera access.
-        Ensures thermal is unbound, optical is bound, and releases when done.
-        
-        Usage:
-            async with usb_manager.exclusive_optical():
-                # Camera is ready, do capture
-                ...
-            # Camera is automatically released
-        """
-        acquired = False
+        """Bind the optical camera for the duration of a capture."""
         try:
-            # Wait for exclusive access with timeout
-            try:
-                async with asyncio.timeout(self._lock_timeout):
-                    await self._camera_semaphore.acquire()
-                    acquired = True
-            except asyncio.TimeoutError:
-                logger.error("Timeout waiting for camera semaphore (optical)")
-                raise
-            
-            # Now we have exclusive access - prepare optical
-            async with self._lock:
-                loop = asyncio.get_event_loop()
-                # Always unbind thermal first
-                await loop.run_in_executor(
-                    None, self._set_device_state, self.thermal_usb_id, "unbind"
-                )
-                # Bind optical
-                result = await loop.run_in_executor(
-                    None, self._set_device_state, self.optical_usb_id, "bind"
-                )
-                if not result:
-                    raise RuntimeError("Failed to bind optical camera")
-                self._current_camera = "optical"
+            async with asyncio.timeout(self._lock_timeout):
+                async with self._lock:
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None, self._set_device_state, self.optical_usb_id, "bind"
+                    )
+                    if not result:
+                        raise RuntimeError("Failed to bind optical camera")
             
             # Allow device to initialize
             await asyncio.sleep(2)
@@ -345,128 +288,24 @@ class USBDeviceManager:
             yield True  # Camera is ready
             
         finally:
-            # Always release: unbind and release semaphore
-            if acquired:
-                try:
+            try:
+                async with asyncio.timeout(self._lock_timeout):
                     async with self._lock:
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(
                             None, self._set_device_state, self.optical_usb_id, "unbind"
                         )
-                        self._current_camera = None
-                except Exception as e:
-                    logger.error(f"Error releasing optical camera: {e}")
-                finally:
-                    self._camera_semaphore.release()
-    
-    @asynccontextmanager
-    async def exclusive_thermal(self):
-        """
-        Context manager for exclusive thermal camera access.
-        Ensures optical is unbound, thermal is bound, and releases when done.
-        
-        Usage:
-            async with usb_manager.exclusive_thermal():
-                # Camera is ready, do capture
-                ...
-            # Camera is automatically released
-        """
-        acquired = False
-        try:
-            # Wait for exclusive access with timeout
-            try:
-                async with asyncio.timeout(self._lock_timeout):
-                    await self._camera_semaphore.acquire()
-                    acquired = True
             except asyncio.TimeoutError:
-                logger.error("Timeout waiting for camera semaphore (thermal)")
-                raise
-            
-            # Now we have exclusive access - prepare thermal
-            async with self._lock:
-                loop = asyncio.get_event_loop()
-                # Always unbind optical first
-                await loop.run_in_executor(
-                    None, self._set_device_state, self.optical_usb_id, "unbind"
-                )
-                # Bind thermal
-                result = await loop.run_in_executor(
-                    None, self._set_device_state, self.thermal_usb_id, "bind"
-                )
-                if not result:
-                    raise RuntimeError("Failed to bind thermal camera")
-                self._current_camera = "thermal"
-            
-            # Thermal needs more time to initialize
-            await asyncio.sleep(3)
-            
-            yield True  # Camera is ready
-            
-        finally:
-            # Always release: unbind and release semaphore
-            if acquired:
-                try:
-                    async with self._lock:
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, self._set_device_state, self.thermal_usb_id, "unbind"
-                        )
-                        self._current_camera = None
-                except Exception as e:
-                    logger.error(f"Error releasing thermal camera: {e}")
-                finally:
-                    self._camera_semaphore.release()
-    
-    async def prepare_optical(self) -> bool:
-        """Prepare for optical camera capture: unbind thermal, bind optical"""
-        try:
-            async with asyncio.timeout(self._lock_timeout):
-                async with self._lock:
-                    loop = asyncio.get_event_loop()
-                    # Run blocking operations in thread pool
-                    await loop.run_in_executor(
-                        None, self._set_device_state, self.thermal_usb_id, "unbind"
-                    )
-                    result = await loop.run_in_executor(
-                        None, self._set_device_state, self.optical_usb_id, "bind"
-                    )
-                    if result:
-                        await asyncio.sleep(2)  # Allow device to initialize
-                    return result
-        except asyncio.TimeoutError:
-            logger.error("Timeout waiting for USB lock (prepare_optical)")
-            return False
-    
-    async def prepare_thermal(self) -> bool:
-        """Prepare for thermal camera capture: unbind optical, bind thermal"""
-        try:
-            async with asyncio.timeout(self._lock_timeout):
-                async with self._lock:
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        None, self._set_device_state, self.optical_usb_id, "unbind"
-                    )
-                    result = await loop.run_in_executor(
-                        None, self._set_device_state, self.thermal_usb_id, "bind"
-                    )
-                    if result:
-                        await asyncio.sleep(3)  # Thermal needs more time
-                    return result
-        except asyncio.TimeoutError:
-            logger.error("Timeout waiting for USB lock (prepare_thermal)")
-            return False
+                logger.error("Timeout waiting for USB lock while releasing optical camera")
     
     async def release_all(self):
-        """Unbind all camera devices to save power/bandwidth"""
+        """Unbind the optical camera to save power/bandwidth."""
         try:
             async with asyncio.timeout(self._lock_timeout):
                 async with self._lock:
                     loop = asyncio.get_event_loop()
                     await loop.run_in_executor(
                         None, self._set_device_state, self.optical_usb_id, "unbind"
-                    )
-                    await loop.run_in_executor(
-                        None, self._set_device_state, self.thermal_usb_id, "unbind"
                     )
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for USB lock (release_all)")
@@ -474,9 +313,6 @@ class USBDeviceManager:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None, self._set_device_state, self.optical_usb_id, "unbind"
-            )
-            await loop.run_in_executor(
-                None, self._set_device_state, self.thermal_usb_id, "unbind"
             )
 
 
@@ -567,11 +403,6 @@ class MQTTPublisher:
         """Publish light metrics to light topic"""
         topic = f"{self.base_topic}/light"
         self._safe_publish(topic, json.dumps(asdict(metrics)), "light")
-    
-    def publish_canopy(self, metrics: CanopyMetrics):
-        """Publish canopy temperature to canopy topic"""
-        topic = f"{self.base_topic}/canopy"
-        self._safe_publish(topic, json.dumps(asdict(metrics)), "canopy")
 
 
 # -----------------------------------------------------------------------------
@@ -707,7 +538,7 @@ def capture_optical_with_light_metrics(
             if cv.imwrite(filename, frame):
                 logger.info(f"Saved optical image: {filename}")
             else:
-                logger.error("Failed to write optical image")
+                logger.error(f"Failed to write optical image: {filename}")
                 filename = None
         
         return filename, metrics
@@ -722,138 +553,6 @@ def capture_optical_with_light_metrics(
 
 
 # -----------------------------------------------------------------------------
-# Thermal Camera & Canopy Temperature
-# -----------------------------------------------------------------------------
-
-def connect_thermal_with_timeout(timeout_seconds: int = 15):
-    """Connect to thermal sensor with timeout"""
-    if not SENXOR_AVAILABLE:
-        logger.error("senxor library not available")
-        return None
-    
-    import threading
-    result = {'mi48': None, 'error': None}
-    
-    def connect_thread():
-        try:
-            mi48, port, _ = connect_senxor()
-            result['mi48'] = mi48
-            result['port'] = port
-        except Exception as e:
-            result['error'] = str(e)
-    
-    thread = threading.Thread(target=connect_thread)
-    thread.start()
-    thread.join(timeout=timeout_seconds)
-    
-    if thread.is_alive():
-        logger.error(f"Thermal connection timed out after {timeout_seconds}s")
-        return None
-    
-    if result['error']:
-        logger.error(f"Thermal connection error: {result['error']}")
-        return None
-    
-    return result['mi48']
-
-
-def capture_thermal_with_canopy_metrics(
-    output_dir: str,
-    save_image: bool = True
-) -> Tuple[Optional[str], Optional[CanopyMetrics]]:
-    """
-    Capture thermal image and compute canopy temperature metrics.
-    Returns (image_path, metrics) or (None, None) on failure.
-    
-    Args:
-        output_dir: Directory to save image
-        save_image: If False, only compute metrics without saving image
-    """
-    if not SENXOR_AVAILABLE:
-        logger.warning("senxor library not installed, thermal capture disabled")
-        return None, None
-    
-    mi48 = None
-    try:
-        # Wait for serial device to appear
-        from serial.tools import list_ports
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            ports = list(list_ports.comports())
-            if ports:
-                break
-            logger.info(f"Waiting for serial ports (attempt {attempt + 1}/{max_retries})")
-            time.sleep(2)
-        
-        mi48 = connect_thermal_with_timeout(15)
-        if mi48 is None:
-            logger.error("Failed to connect to thermal sensor")
-            return None, None
-        
-        # Configure sensor
-        mi48.set_fps(10)
-        mi48.disable_filter(f1=True, f2=True, f3=True)
-        mi48.set_filter_1(85)
-        mi48.enable_filter(f1=True)
-        
-        # Start stream and capture
-        mi48.start(stream=True, with_header=True)
-        time.sleep(1)  # Stabilization
-        
-        data, header = mi48.read()
-        
-        if data is None:
-            logger.error("No data received from thermal sensor")
-            return None, None
-        
-        # Convert to temperature frame (80x62)
-        frame = data_to_frame(data, (80, 62), hflip=False)
-        
-        # Compute canopy temperature metrics (raw temperature values)
-        metrics = CanopyMetrics(
-            timestamp=datetime.now().isoformat(),
-            mean_temp=float(np.mean(frame)),
-            min_temp=float(np.min(frame)),
-            max_temp=float(np.max(frame)),
-            std_temp=float(np.std(frame)),
-            median_temp=float(np.median(frame))
-        )
-        
-        # Save image if requested
-        filename = None
-        if save_image:
-            # Create visualization for saving
-            par = {'blur_ks': 3, 'd': 5, 'sigmaColor': 27, 'sigmaSpace': 27}
-            filt_uint8 = cv_filter(remap(frame), par, use_median=True, use_bilat=True)
-            heatmap = cv.applyColorMap(filt_uint8, cv.COLORMAP_JET)
-            
-            # Upscale for visibility
-            heatmap_large = cv.resize(heatmap, (640, 496), interpolation=cv.INTER_CUBIC)
-            
-            # Save image
-            filename = os.path.join(output_dir, f"thermal_{int(time.time())}.jpg")
-            if cv.imwrite(filename, heatmap_large):
-                logger.info(f"Saved thermal image: {filename}")
-            else:
-                logger.error("Failed to write thermal image")
-                filename = None
-        
-        return filename, metrics
-    
-    except Exception as e:
-        logger.error(f"Thermal capture error: {e}")
-        return None, None
-    
-    finally:
-        if mi48 is not None:
-            try:
-                mi48.stop()
-            except:
-                pass
-
-
-# -----------------------------------------------------------------------------
 # Main Monitoring Loop
 # -----------------------------------------------------------------------------
 
@@ -862,7 +561,7 @@ class GreenhouseMonitor:
     Main monitoring coordinator.
     Uses asyncio for BLE and coordination, ThreadPoolExecutor for camera I/O.
     
-    Each component (BLE, optical camera, thermal camera) runs independently
+    Each component (BLE and optical camera) runs independently
     with its own error handling and circuit breaker for fault isolation.
     """
     
@@ -893,7 +592,6 @@ class GreenhouseMonitor:
         
         # Track last image save times
         self._last_optical_image_time: float = 0
-        self._last_thermal_image_time: float = 0
         
         # Single thread for camera operations (memory efficient)
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -902,7 +600,6 @@ class GreenhouseMonitor:
         # Circuit breakers for each component (3 failures = 5 min cooldown)
         self.circuit_breakers = {
             'optical': CircuitBreaker('optical', failure_threshold=3, recovery_timeout=300),
-            'thermal': CircuitBreaker('thermal', failure_threshold=3, recovery_timeout=300),
         }
         # Per-BLE-device circuit breakers
         for addr in ble_addresses:
@@ -912,7 +609,6 @@ class GreenhouseMonitor:
         
         # Timeouts for blocking operations
         self.optical_capture_timeout = 30  # seconds
-        self.thermal_capture_timeout = 60  # seconds
     
     async def ble_monitor_loop(self):
         """Poll all BLE sensors at regular intervals"""
@@ -968,10 +664,7 @@ class GreenhouseMonitor:
             await asyncio.sleep(sleep_time)
     
     async def optical_capture_loop(self):
-        """
-        Capture optical images at regular intervals.
-        Runs independently of thermal camera - failures here don't affect thermal.
-        """
+        """Capture optical images at regular intervals."""
         logger.info(f"Starting optical capture loop (interval: {self.camera_interval}s)")
         if self.image_capture_interval:
             logger.info(f"Optical image save interval: {self.image_capture_interval}s")
@@ -1047,93 +740,6 @@ class GreenhouseMonitor:
             sleep_time = max(0, self.camera_interval - elapsed)
             await asyncio.sleep(sleep_time)
     
-    async def thermal_capture_loop(self):
-        """
-        Capture thermal images at regular intervals.
-        Runs independently of optical camera - failures here don't affect optical.
-        """
-        logger.info(f"Starting thermal capture loop (interval: {self.camera_interval}s)")
-        if self.image_capture_interval:
-            logger.info(f"Thermal image save interval: {self.image_capture_interval}s")
-        else:
-            logger.info("Thermal image saving disabled (metrics only)")
-        
-        # Stagger thermal captures to avoid USB contention with optical
-        # Start thermal captures offset by half the interval
-        await asyncio.sleep(self.camera_interval / 2)
-        
-        loop = asyncio.get_event_loop()
-        cb = self.circuit_breakers['thermal']
-        
-        while self._running:
-            start_time = time.monotonic()
-            
-            # Check circuit breaker
-            if not await cb.attempt():
-                logger.debug("Thermal camera: circuit breaker open, skipping")
-                await asyncio.sleep(self.camera_interval)
-                continue
-            
-            # Determine if we should save an image this cycle
-            should_save_image = False
-            if self.image_capture_interval is not None:
-                time_since_last = time.monotonic() - self._last_thermal_image_time
-                should_save_image = time_since_last >= self.image_capture_interval
-            
-            try:
-                logger.info("Acquiring exclusive thermal camera access...")
-                async with self.usb.exclusive_thermal():
-                    # Additional wait for thermal serial port
-                    await asyncio.sleep(2)
-                    
-                    # Run capture with timeout
-                    try:
-                        image_path, canopy_metrics = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self.executor,
-                                functools.partial(
-                                    capture_thermal_with_canopy_metrics,
-                                    self.output_dir,
-                                    save_image=should_save_image
-                                )
-                            ),
-                            timeout=self.thermal_capture_timeout
-                        )
-                        
-                        if canopy_metrics:
-                            logger.info(
-                                f"Canopy: mean={canopy_metrics.mean_temp:.1f}°C, "
-                                f"range={canopy_metrics.min_temp:.1f}-{canopy_metrics.max_temp:.1f}°C"
-                            )
-                            if self.mqtt:
-                                self.mqtt.publish_canopy(canopy_metrics)
-                            await cb.record_success()
-                            
-                            # Update last image save time if we saved
-                            if image_path:
-                                self._last_thermal_image_time = time.monotonic()
-                        else:
-                            logger.warning("Thermal capture returned no metrics")
-                            await cb.record_failure()
-                    
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            f"Thermal capture timed out after {self.thermal_capture_timeout}s"
-                        )
-                        await cb.record_failure()
-            
-            except asyncio.TimeoutError:
-                logger.error("Timeout waiting for exclusive camera access (thermal)")
-                await cb.record_failure()
-            except Exception as e:
-                logger.error(f"Thermal capture error: {e}")
-                await cb.record_failure()
-            
-            # Sleep for remaining interval
-            elapsed = time.monotonic() - start_time
-            sleep_time = max(0, self.camera_interval - elapsed)
-            await asyncio.sleep(sleep_time)
-    
     async def run(self):
         """
         Run all monitoring tasks concurrently.
@@ -1148,9 +754,6 @@ class GreenhouseMonitor:
         
         tasks.append(asyncio.create_task(
             self._supervised_task(self.optical_capture_loop(), "Optical camera")
-        ))
-        tasks.append(asyncio.create_task(
-            self._supervised_task(self.thermal_capture_loop(), "Thermal camera")
         ))
         
         try:
@@ -1221,7 +824,6 @@ Environment Variables:
     GREENHOUSE_CAMERA_INTERVAL   - Camera metric collection interval in seconds
     GREENHOUSE_IMAGE_CAPTURE_INTERVAL - Image save interval (0=same as camera, -1=disabled)
     GREENHOUSE_OPTICAL_USB_ID    - USB ID for optical camera
-    GREENHOUSE_THERMAL_USB_ID    - USB ID for thermal camera
     GREENHOUSE_OUTPUT_DIR        - Directory to save captured images
     GREENHOUSE_MQTT_HOST         - MQTT broker address
     GREENHOUSE_MQTT_PORT         - MQTT broker port
@@ -1281,13 +883,6 @@ Examples:
         help=f"USB ID for optical camera (default: {DEFAULT_OPTICAL_USB_ID}) "
              "(env: GREENHOUSE_OPTICAL_USB_ID)"
     )
-    parser.add_argument(
-        "--thermal-usb-id",
-        default=env_or_default("GREENHOUSE_THERMAL_USB_ID", DEFAULT_THERMAL_USB_ID),
-        help=f"USB ID for thermal camera (default: {DEFAULT_THERMAL_USB_ID}) "
-             "(env: GREENHOUSE_THERMAL_USB_ID)"
-    )
-    
     # Output options
     parser.add_argument(
         "-d", "--output-dir",
@@ -1381,7 +976,7 @@ def main():
             mqtt_publisher = None
     
     # Setup USB manager
-    usb_manager = USBDeviceManager(args.optical_usb_id, args.thermal_usb_id)
+    usb_manager = USBDeviceManager(args.optical_usb_id)
     
     # Create monitor
     monitor = GreenhouseMonitor(

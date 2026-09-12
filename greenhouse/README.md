@@ -1,16 +1,15 @@
 # Greenhouse Monitor
 
-A unified monitoring solution for greenhouse environments running on Raspberry Pi Zero 2 W. Combines BLE climate sensors, optical camera light measurement, and thermal camera canopy temperature monitoring into a single, resource-efficient script.
+A unified monitoring solution for greenhouse environments running on Raspberry Pi Zero 2 W. Combines BLE climate sensors and optical camera light measurement in a single, resource-efficient script.
 
 ## Features
 
 - **BLE Climate Monitoring**: Poll multiple Bluetooth Low Energy temperature/humidity sensors
 - **Optical Light Measurement**: Capture images and compute average light levels
-- **Thermal Canopy Analysis**: Measure plant canopy temperature using thermal imaging
 - **MQTT Publishing**: Stream all sensor data to an MQTT broker for integration with Home Assistant, Node-RED, etc.
-- **Image Archival**: Save optical and thermal images to disk at configurable intervals
+- **Image Archival**: Save optical images to disk at configurable intervals
 - **Fault Isolation**: Circuit breakers prevent one failing sensor from affecting others
-- **USB Bandwidth Management**: Enforces mutual exclusivity for camera devices on bandwidth-limited Pi Zero
+- **USB Device Management**: Binds the optical camera only while capturing
 
 ## System Requirements
 
@@ -20,7 +19,6 @@ A unified monitoring solution for greenhouse environments running on Raspberry P
   - Bluetooth support (for BLE sensors)
   - USB port (for cameras)
 - **Optical USB Camera** (e.g., standard webcam)
-- **Meridian Innovation SenXor Thermal Camera** (MI48)
 - **BLE Climate Sensors** (compatible with the `0000fff3/0000fff5` characteristic protocol)
 
 ### Software
@@ -31,37 +29,26 @@ A unified monitoring solution for greenhouse environments running on Raspberry P
 
 ## Installation
 
-### Quick Install
+Build the Debian package from the repository root:
 
 ```bash
-# Clone or copy the pysenxor repository
-cd /path/to/pysenxor-master/greenhouse
-
-# Run the installer (requires root)
-sudo ./install-service.sh
+bash packaging/build-deb.sh
 ```
 
-### Manual Install
+Copy the resulting package from `dist/` to the Raspberry Pi and install it:
 
 ```bash
-# Create installation directory
-sudo mkdir -p /opt/greenhouse
-sudo mkdir -p /etc/greenhouse
+sudo apt install ./greenhouse-monitor_1.5.0-6_all.deb
+```
 
-# Create virtual environment
-python3 -m venv /opt/greenhouse/venv
+The package installs the application under `/opt/greenhouse`, preserves the configuration at `/etc/greenhouse/greenhouse.env` during upgrades, and enables and restarts the systemd service. Network access is required during installation so the package can populate its Python virtual environment.
 
-# Install pysenxor with greenhouse-monitor
-cd /path/to/pysenxor-master
-/opt/greenhouse/venv/bin/pip install -e .
+### Development Install
 
-# This installs the 'greenhouse-monitor' command to the venv's bin/
-# Verify installation:
-/opt/greenhouse/venv/bin/greenhouse-monitor --help
-
-# Copy configuration files
-sudo cp greenhouse/greenhouse.env /etc/greenhouse/
-sudo cp greenhouse/greenhouse-monitor.service /etc/systemd/system/
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/greenhouse-monitor --help
 ```
 
 ## Configuration
@@ -83,7 +70,6 @@ GREENHOUSE_IMAGE_CAPTURE_INTERVAL=3600  # Save images hourly
 
 # USB Device IDs (find with: lsusb -t)
 GREENHOUSE_OPTICAL_USB_ID=1-1.1.4
-GREENHOUSE_THERMAL_USB_ID=1-1.1.3
 
 # Output
 GREENHOUSE_OUTPUT_DIR=/opt/greenhouse/captures
@@ -105,7 +91,6 @@ GREENHOUSE_MQTT_BASE_TOPIC=greenhouse
 | `GREENHOUSE_CAMERA_INTERVAL` | `--camera-interval` | 300 | Seconds between camera metric captures |
 | `GREENHOUSE_IMAGE_CAPTURE_INTERVAL` | `--image-capture-interval` | 0 | Image save interval (0 = same as camera, -1 = disabled) |
 | `GREENHOUSE_OPTICAL_USB_ID` | `--optical-usb-id` | 1-1.1.4 | USB device ID for optical camera |
-| `GREENHOUSE_THERMAL_USB_ID` | `--thermal-usb-id` | 1-1.1.3 | USB device ID for thermal camera |
 | `GREENHOUSE_OUTPUT_DIR` | `--output-dir` | . | Directory for saved images |
 | `GREENHOUSE_MQTT_HOST` | `--mqtt-host` | (none) | MQTT broker address |
 | `GREENHOUSE_MQTT_PORT` | `--mqtt-port` | 1883 | MQTT broker port |
@@ -124,7 +109,6 @@ lsusb -t
 # /:  Bus 01.Port 1: Dev 1, Class=root_hub
 #     |__ Port 1: Dev 2, If 0, Class=Hub
 #         |__ Port 1: Dev 3, If 0, Class=Hub
-#             |__ Port 3: Dev 5, If 0, Class=Video  <-- Thermal: 1-1.1.3
 #             |__ Port 4: Dev 6, If 0, Class=Video  <-- Optical: 1-1.1.4
 ```
 
@@ -146,7 +130,6 @@ bluetoothctl scan on
 |-------|-------------|----------|
 | `greenhouse/climate/{MAC}` | BLE sensor data | `--ble-interval` |
 | `greenhouse/light` | Optical camera light metrics | `--camera-interval` |
-| `greenhouse/canopy` | Thermal camera temperature metrics | `--camera-interval` |
 
 ### Payload Schemas
 
@@ -174,19 +157,6 @@ bluetoothctl scan on
   "std": 45.2,
   "bright_pixel_ratio": 0.12,
   "dark_pixel_ratio": 0.08
-}
-```
-
-#### Canopy Metrics (`greenhouse/canopy`)
-
-```json
-{
-  "timestamp": "2026-03-02T14:30:00.123456",
-  "mean_temp": 26.3,
-  "min_temp": 22.1,
-  "max_temp": 31.5,
-  "std_temp": 2.4,
-  "median_temp": 26.0
 }
 ```
 
@@ -237,31 +207,22 @@ sudo journalctl -u greenhouse-monitor --since "1 hour ago"
 ### Concurrency Model
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      asyncio Event Loop                      │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│  BLE Monitor    │  Optical Loop   │     Thermal Loop        │
-│    (async)      │    (async)      │       (async)           │
-│                 │        │        │           │             │
-│                 │        ▼        │           ▼             │
-│                 │  ┌──────────┐   │    ┌──────────┐         │
-│                 │  │ Thread   │   │    │ Thread   │         │
-│                 │  │ Pool (1) │   │    │ Pool (1) │         │
-│                 │  └──────────┘   │    └──────────┘         │
-└─────────────────┴─────────────────┴─────────────────────────┘
-                              │
-                              ▼
-                    ┌──────────────────┐
-                    │  USB Semaphore   │
-                    │  (Mutex for USB) │
-                    └──────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-     ┌─────────────────┐             ┌─────────────────┐
-     │ Optical Camera  │             │ Thermal Camera  │
-     │   (bound)       │     OR      │   (bound)       │
-     └─────────────────┘             └─────────────────┘
+┌───────────────────────────────────────┐
+│          asyncio Event Loop           │
+├──────────────────┬────────────────────┤
+│   BLE Monitor    │    Optical Loop    │
+│     (async)      │      (async)       │
+│                  │         │          │
+│                  │         ▼          │
+│                  │   ┌───────────┐    │
+│                  │   │ Thread    │    │
+│                  │   │ Pool (1)  │    │
+│                  │   └─────┬─────┘    │
+└──────────────────┴─────────┼──────────┘
+                             ▼
+                    ┌─────────────────┐
+                    │ Optical Camera  │
+                    └─────────────────┘
 ```
 
 ### Error Isolation
@@ -271,7 +232,6 @@ Each component has its own **circuit breaker** to prevent cascading failures:
 | Component | Failure Threshold | Recovery Timeout |
 |-----------|-------------------|------------------|
 | Optical Camera | 3 failures | 5 minutes |
-| Thermal Camera | 3 failures | 5 minutes |
 | BLE Sensors (each) | 5 failures | 3 minutes |
 
 When a circuit breaker opens:
@@ -280,14 +240,9 @@ When a circuit breaker opens:
 3. After the recovery timeout, the component tries again
 4. On success, normal operation resumes
 
-### USB Bandwidth Management
+### USB Device Management
 
-The Pi Zero 2 W has limited USB bandwidth. This script enforces that only one camera can be bound at a time:
-
-1. **Semaphore Lock**: A camera task must acquire the semaphore before binding
-2. **Exclusive Access**: The other camera is always unbound first
-3. **Automatic Release**: Context managers ensure cleanup even on errors
-4. **Staggered Scheduling**: Thermal captures are offset by half the interval to minimize contention
+The optical camera is bound before each capture and automatically unbound afterward, including when capture fails.
 
 ## Resource Usage
 
@@ -336,19 +291,6 @@ sudo systemctl status bluetooth
 bluetoothctl scan on
 ```
 
-#### Thermal camera not connecting
-
-```bash
-# Check serial ports
-ls -la /dev/ttyUSB* /dev/ttyACM*
-
-# Verify USB device is bound
-cat /sys/bus/usb/devices/1-1.1.3/driver/module
-
-# Check senxor can connect
-python3 -c "from senxor.utils import connect_senxor; print(connect_senxor())"
-```
-
 #### MQTT not publishing
 
 ```bash
@@ -365,7 +307,6 @@ mosquitto_sub -h YOUR_BROKER -u USER -P PASS -t "greenhouse/#"
 |---------|---------|
 | `Circuit breaker [X]: OPEN` | Component X failed repeatedly, pausing |
 | `Circuit breaker [X]: CLOSED (recovered)` | Component X working again |
-| `Timeout waiting for camera semaphore` | Other camera task holding USB too long |
 | `Failed to bind X camera` | USB device not available or permission issue |
 
 ## Integration Examples
@@ -391,10 +332,6 @@ mqtt:
       value_template: "{{ (value_json.normalized_mean * 100) | round(1) }}"
       unit_of_measurement: "%"
       
-    - name: "Canopy Temperature"
-      state_topic: "greenhouse/canopy"
-      value_template: "{{ value_json.mean_temp }}"
-      unit_of_measurement: "°C"
 ```
 
 ### Node-RED

@@ -1,0 +1,4 @@
+bleak>=0.21,<2
+numpy>=1.24,<3
+opencv-python-headless>=4.8,<5
+paho-mqtt>=1.6,<3

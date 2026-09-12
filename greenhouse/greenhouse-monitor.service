@@ -1,8 +1,10 @@
 [Unit]
-Description=Greenhouse Monitor - BLE Climate, Optical, and Thermal Camera Monitoring
+Description=Greenhouse Monitor - BLE Climate and Optical Camera Monitoring
 Documentation=https://github.com/your-repo/pysenxor
-After=network.target bluetooth.target
-Wants=bluetooth.target
+After=network-online.target remote-fs.target bluetooth.target
+Wants=network-online.target bluetooth.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,7 +12,6 @@ User=root
 # Root required for USB bind/unbind operations
 # If running as non-root, ensure user has permissions for:
 #   - /sys/bus/usb/drivers/usb/bind and unbind
-#   - Serial ports (/dev/ttyUSB*, /dev/ttyACM*)
 #   - Video devices (/dev/video*)
 #   - Bluetooth
 
@@ -26,11 +27,6 @@ ExecStart=/opt/greenhouse/venv/bin/greenhouse-monitor
 # Restart configuration
 Restart=on-failure
 RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
-# Watchdog - restart if service hangs
-WatchdogSec=600
 
 # Resource limits (optimized for Pi Zero 2 W)
 # 256MB memory limit - adjust based on your needs
@@ -53,6 +49,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/greenhouse
 ReadWritePaths=/opt/greenhouse/captures
+ReadWritePaths=/greenhouse-captures
 
 # Logging
 StandardOutput=journal

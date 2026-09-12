@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        rm -rf /opt/greenhouse-datastore/venv
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+        fi
+        ;;
+    purge)
+        rm -rf /opt/greenhouse-datastore /var/lib/greenhouse-datastore
+        deluser --system greenhouse >/dev/null 2>&1 || true
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,14 +1,21 @@
-PySenXor is a Python library for interacting with Meridian Innovation’s camera
-modules and thermal imaging processors.
+# Greenhouse Monitor
 
-PySenXor aims to bring you a great thermal imaging stream out of the box
-with a few lines of code, and enable you to focus on the processing
-and analytics of the thermal data for the application you're trying to
-enhance by adding thermal imaging.
+This program watches a Bluetooth thermometer and optical camera inside a greenhouse, saving images and publishing metrics to MQTT on configured intervals. See `greenhouse/greenhouse.env` for configuration.
 
-See docs directory for details.
+## Debian Package
 
-Installation (assuming you are in a virtual environment and in the root of pysenxor):
+Build an installable package without root access:
 
-pip install -e ./
+```bash
+bash packaging/build-deb.sh
+```
 
+The package is written to `dist/`. Install it, or upgrade an existing `greenhouse-monitor` package, with:
+
+```bash
+sudo apt install ./dist/greenhouse-monitor_1.5.0-6_all.deb
+```
+
+The existing `/etc/greenhouse/greenhouse.env` is preserved during upgrades. Package configuration needs network access to install Python dependencies into `/opt/greenhouse/venv`.
+
+See `packaging/README.md` for version overrides and CI details.

@@ -1,0 +1,3 @@
+#!/bin/sh
+find /opt/greenhouse/captures -name "*.jpg" -mtime +7 -delete 2>/dev/null || true
+find /var/lib/greenhouse/captures -name "*.jpg" -mtime +7 -delete 2>/dev/null || true

@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: greenhouse-datastore
+Version: 1.0.0
+Summary: Store greenhouse MQTT readings in PostgreSQL/TimescaleDB.
+Requires-Python: >=3.11
+Requires-Dist: paho-mqtt<3,>=2
+Requires-Dist: psycopg[binary]<4,>=3.1

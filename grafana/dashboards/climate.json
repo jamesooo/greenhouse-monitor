@@ -1,0 +1,204 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "greenhouse-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "greenhouse-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH series AS (SELECT observed_at AS time, main_temp AS value, sensor_address || ' main' AS metric FROM climate_readings WHERE main_temp IS NOT NULL UNION ALL SELECT observed_at, external_temp, sensor_address || ' external' FROM climate_readings WHERE external_temp IS NOT NULL UNION ALL SELECT bucket, main_temp_avg, sensor_address || ' main' FROM climate_readings_hourly WHERE main_temp_avg IS NOT NULL AND bucket < COALESCE((SELECT min(observed_at) FROM climate_readings), 'infinity'::timestamptz) UNION ALL SELECT bucket, external_temp_avg, sensor_address || ' external' FROM climate_readings_hourly WHERE external_temp_avg IS NOT NULL AND bucket < COALESCE((SELECT min(observed_at) FROM climate_readings), 'infinity'::timestamptz)) SELECT time, value, metric FROM series WHERE $__timeFilter(time) ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Temperature",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "greenhouse-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "greenhouse-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH series AS (SELECT observed_at AS time, main_humidity AS value, sensor_address || ' main' AS metric FROM climate_readings WHERE main_humidity IS NOT NULL UNION ALL SELECT observed_at, external_humidity, sensor_address || ' external' FROM climate_readings WHERE external_humidity IS NOT NULL UNION ALL SELECT bucket, main_humidity_avg, sensor_address || ' main' FROM climate_readings_hourly WHERE main_humidity_avg IS NOT NULL AND bucket < COALESCE((SELECT min(observed_at) FROM climate_readings), 'infinity'::timestamptz) UNION ALL SELECT bucket, external_humidity_avg, sensor_address || ' external' FROM climate_readings_hourly WHERE external_humidity_avg IS NOT NULL AND bucket < COALESCE((SELECT min(observed_at) FROM climate_readings), 'infinity'::timestamptz)) SELECT time, value, metric FROM series WHERE $__timeFilter(time) ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Humidity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "greenhouse-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "greenhouse-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH series AS (SELECT observed_at AS time, normalized_mean * 100 AS average, NULL::double precision AS minimum, NULL::double precision AS maximum FROM light_readings UNION ALL SELECT bucket, normalized_mean_avg * 100, normalized_mean_min * 100, normalized_mean_max * 100 FROM light_readings_hourly WHERE bucket < COALESCE((SELECT min(observed_at) FROM light_readings), 'infinity'::timestamptz)) SELECT time, average, minimum, maximum FROM series WHERE $__timeFilter(time) ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Relative Light Level",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 41,
+  "tags": ["greenhouse", "climate"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Greenhouse Climate",
+  "uid": "greenhouse-climate",
+  "version": 1
+}

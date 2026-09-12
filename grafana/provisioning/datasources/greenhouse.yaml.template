@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: Greenhouse PostgreSQL
+    uid: greenhouse-postgres
+    type: postgres
+    access: proxy
+    url: 127.0.0.1:5432
+    user: greenhouse_grafana
+    database: greenhouse
+    isDefault: true
+    editable: false
+    jsonData:
+      database: greenhouse
+      sslmode: disable
+      postgresVersion: 1700
+      timescaledb: true
+    secureJsonData:
+      password: __GREENHOUSE_GRAFANA_DB_PASSWORD__

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "greenhouse-datastore"
+version = "1.0.0"
+description = "Store greenhouse MQTT readings in PostgreSQL/TimescaleDB."
+requires-python = ">=3.11"
+dependencies = [
+	"paho-mqtt>=2,<3",
+	"psycopg[binary]>=3.1,<4",
+]
+
+[project.scripts]
+greenhouse-datastore = "greenhouse_datastore.consumer:main"
+
+[tool.setuptools]
+packages = ["greenhouse_datastore"]
+
+[tool.setuptools.package-data]
+greenhouse_datastore = ["schema.sql"]
