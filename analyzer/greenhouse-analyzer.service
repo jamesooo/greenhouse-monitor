@@ -1,0 +1,30 @@
+[Unit]
+Description=Daily AI analysis of the greenhouse Grafana dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=greenhouse-analyzer
+Group=greenhouse-analyzer
+EnvironmentFile=/etc/greenhouse-analyzer/greenhouse-analyzer.env
+ExecStart=/opt/greenhouse-analyzer/venv/bin/greenhouse-analyzer
+StateDirectory=greenhouse-analyzer
+StateDirectoryMode=0750
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=greenhouse-analyzer
+TimeoutStartSec=20min

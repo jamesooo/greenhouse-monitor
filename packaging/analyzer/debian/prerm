@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            systemctl disable --now greenhouse-analyzer.timer >/dev/null 2>&1 || true
+            systemctl stop greenhouse-analyzer.service >/dev/null 2>&1 || true
+            systemctl disable --now greenhouse-analysis-site.service >/dev/null 2>&1 || true
+        fi
+        ;;
+    upgrade)
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "greenhouse-analyzer"
+version = "1.0.0"
+description = "Publish daily AI analysis of the greenhouse Grafana dashboard."
+requires-python = ">=3.11"
+dependencies = [
+	"deepagents>=0.7,<0.8",
+	"langchain-ollama>=1.1,<2",
+	"pelican[markdown]>=4.11,<5",
+]
+
+[project.scripts]
+greenhouse-analyzer = "greenhouse_analyzer.analyzer:main"
+
+[tool.setuptools]
+packages = ["greenhouse_analyzer"]

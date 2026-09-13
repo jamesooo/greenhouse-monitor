@@ -1,0 +1,5 @@
+Review this greenhouse dashboard for the previous 24 hours. Use both the latest
+camera image and the environmental charts. Summarize the current state, notable
+temperature, humidity, and light trends, visible plant concerns, and any
+practical checks that should be made today. Be concise. Do not invent sensor
+values that are not legible, and clearly label uncertainty.

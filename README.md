@@ -1,6 +1,19 @@
 # Greenhouse Monitor
 
-This program watches a Bluetooth thermometer and optical camera inside a greenhouse, saving images and publishing metrics to MQTT on configured intervals. See `greenhouse/greenhouse.env` for configuration.
+This repository contains the services used to monitor and review the greenhouse:
+
+- `greenhouse-monitor` captures camera images and publishes climate and light
+	readings to MQTT;
+- `greenhouse-datastore` stores those readings in TimescaleDB and serves the
+	latest camera image;
+- the provisioned Grafana dashboard combines the image and environmental
+	history; and
+- `greenhouse-analyzer` renders that dashboard, analyzes it with Deep Agents
+	and a configurable Ollama vision model, and publishes a daily Pelican site.
+
+See `greenhouse/greenhouse.env` for producer configuration,
+`consumer/README.md` for datastore setup, `grafana/README.md` for dashboard
+provisioning, and `analyzer/README.md` for the analyzer deployment runbook.
 
 ## Debian Package
 

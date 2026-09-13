@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Archive | {{ SITENAME }}{% endblock %}
+{% block content %}
+  <section class="archive">
+    <p class="eyebrow">Observation history</p>
+    <h1>Daily report archive</h1>
+    <ol>
+      {% for article in dates %}
+        <li>
+          <a href="{{ SITEURL }}/{{ article.url }}">{{ article.title }}</a>
+          <time datetime="{{ article.date.isoformat() }}">{{ article.locale_date }}</time>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+{% endblock %}

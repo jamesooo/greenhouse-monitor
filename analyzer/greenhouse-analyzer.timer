@@ -1,0 +1,11 @@
+[Unit]
+Description=Run greenhouse dashboard analysis every day
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+RandomizedDelaySec=10min
+Unit=greenhouse-analyzer.service
+
+[Install]
+WantedBy=timers.target

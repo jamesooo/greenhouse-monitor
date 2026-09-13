@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+  {% if articles %}
+    {% set latest = articles[0] %}
+    <article class="report">
+      <header>
+        <p class="eyebrow">Latest field report</p>
+        <h1><a href="{{ SITEURL }}/{{ latest.url }}">{{ latest.title }}</a></h1>
+        <time datetime="{{ latest.date.isoformat() }}">{{ latest.locale_date }}</time>
+      </header>
+      <div class="report-body">{{ latest.content }}</div>
+    </article>
+    {% if articles|length > 1 %}
+      <section class="history" aria-labelledby="history-heading">
+        <h2 id="history-heading">Recent reports</h2>
+        <ol>
+          {% for article in articles[1:8] %}
+            <li>
+              <a href="{{ SITEURL }}/{{ article.url }}">{{ article.title }}</a>
+              <time datetime="{{ article.date.isoformat() }}">{{ article.locale_date }}</time>
+            </li>
+          {% endfor %}
+        </ol>
+      </section>
+    {% endif %}
+  {% else %}
+    <section class="empty-state">
+      <p class="eyebrow">Greenhouse monitoring</p>
+      <h1>Waiting for the first daily report</h1>
+      <p>The analyzer is installed and the site is ready.</p>
+    </section>
+  {% endif %}
+{% endblock %}

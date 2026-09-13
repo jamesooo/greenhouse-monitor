@@ -1,0 +1,31 @@
+[Unit]
+Description=Greenhouse daily analysis static site
+After=network.target
+
+[Service]
+Type=simple
+User=greenhouse-analyzer
+Group=greenhouse-analyzer
+EnvironmentFile=/etc/greenhouse-analyzer/greenhouse-analyzer.env
+ExecStart=/opt/greenhouse-analyzer/venv/bin/python -m http.server ${GREENHOUSE_SITE_PORT} --bind ${GREENHOUSE_SITE_HOST} --directory ${GREENHOUSE_SITE_OUTPUT_DIRECTORY}
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=greenhouse-analysis-site
+
+[Install]
+WantedBy=multi-user.target

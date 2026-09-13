@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ article.title }} | {{ SITENAME }}{% endblock %}
+{% block content %}
+  <article class="report">
+    <header>
+      <p class="eyebrow">Daily field report</p>
+      <h1>{{ article.title }}</h1>
+      <time datetime="{{ article.date.isoformat() }}">{{ article.locale_date }}</time>
+    </header>
+    <div class="report-body">{{ article.content }}</div>
+  </article>
+{% endblock %}
