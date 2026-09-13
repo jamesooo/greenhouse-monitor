@@ -62,11 +62,13 @@ class Config:
     grafana_width: int
     grafana_height: int
     grafana_timezone: str
+    image_url: str
     ollama_base_url: str
     ollama_model: str
     ollama_temperature: float
     ollama_num_predict: int
     prompt_file: Path
+    skills_directory: Path
     site_content_directory: Path
     site_output_directory: Path
     pelican_settings: Path
@@ -89,6 +91,9 @@ class Config:
             grafana_width=int(values.get("GREENHOUSE_GRAFANA_WIDTH", "1600")),
             grafana_height=int(values.get("GREENHOUSE_GRAFANA_HEIGHT", "1200")),
             grafana_timezone=values.get("GREENHOUSE_GRAFANA_TIMEZONE", "browser"),
+            image_url=values.get(
+                "GREENHOUSE_IMAGE_URL", "https://datastore.tail63be5a.ts.net/"
+            ),
             ollama_base_url=values.get(
                 "GREENHOUSE_OLLAMA_BASE_URL", "http://127.0.0.1:11434"
             ).rstrip("/"),
@@ -103,6 +108,12 @@ class Config:
                 values.get(
                     "GREENHOUSE_ANALYSIS_PROMPT_FILE",
                     "/etc/greenhouse-analyzer/prompt.txt",
+                )
+            ),
+            skills_directory=Path(
+                values.get(
+                    "GREENHOUSE_ANALYSIS_SKILLS_DIRECTORY",
+                    "/etc/greenhouse-analyzer/skills",
                 )
             ),
             site_content_directory=Path(
@@ -136,6 +147,7 @@ class Config:
     def validate(self) -> None:
         for name, value in (
             ("GREENHOUSE_GRAFANA_URL", self.grafana_url),
+            ("GREENHOUSE_IMAGE_URL", self.image_url),
             ("GREENHOUSE_OLLAMA_BASE_URL", self.ollama_base_url),
         ):
             parsed = urlsplit(value)
@@ -190,6 +202,30 @@ def render_dashboard(config: Config) -> bytes:
     return image
 
 
+def fetch_greenhouse_image(config: Config) -> bytes:
+    request = Request(
+        config.image_url,
+        headers={"Accept": "image/jpeg", "User-Agent": "greenhouse-analyzer/1.0"},
+    )
+    try:
+        with _urlopen(request, config.request_timeout) as response:
+            content_type = response.headers.get_content_type()
+            image = response.read(config.max_image_bytes + 1)
+    except (HTTPError, URLError, TimeoutError) as error:
+        raise RuntimeError(f"Latest greenhouse image request failed: {error}") from error
+    if content_type != "image/jpeg":
+        raise RuntimeError(
+            f"Latest greenhouse image returned {content_type}, expected image/jpeg"
+        )
+    if not image:
+        raise RuntimeError("Latest greenhouse image request returned an empty image")
+    if len(image) > config.max_image_bytes:
+        raise RuntimeError(
+            "Latest greenhouse image exceeded GREENHOUSE_ANALYSIS_MAX_IMAGE_BYTES"
+        )
+    return image
+
+
 def read_prompt(config: Config) -> str:
     try:
         prompt = config.prompt_file.read_text(encoding="utf-8").strip()
@@ -200,10 +236,33 @@ def read_prompt(config: Config) -> str:
     return prompt
 
 
+def validate_skills_directory(config: Config) -> None:
+    try:
+        entries = list(config.skills_directory.iterdir())
+    except OSError as error:
+        raise RuntimeError(
+            f"Could not read skills directory {config.skills_directory}: {error}"
+        ) from error
+
+    for entry in entries:
+        if entry.name.startswith(".") or not entry.is_dir():
+            continue
+        skill_file = entry / "SKILL.md"
+        if not skill_file.is_file():
+            raise RuntimeError(f"Skill directory {entry} does not contain SKILL.md")
+        try:
+            if not skill_file.read_text(encoding="utf-8").strip():
+                raise RuntimeError(f"Skill file {skill_file} is empty")
+        except OSError as error:
+            raise RuntimeError(f"Could not read skill file {skill_file}: {error}") from error
+
+
 def _create_agent(config: Config) -> Agent:
     from deepagents import create_deep_agent
+    from deepagents.backends.filesystem import FilesystemBackend
     from langchain_ollama import ChatOllama
 
+    validate_skills_directory(config)
     model = ChatOllama(
         model=config.ollama_model,
         base_url=config.ollama_base_url,
@@ -214,6 +273,8 @@ def _create_agent(config: Config) -> Agent:
     return create_deep_agent(
         model=model,
         tools=[],
+        skills=["/"],
+        backend=FilesystemBackend(root_dir=config.skills_directory),
         system_prompt=(
             "You analyze a greenhouse operations dashboard. Base every conclusion on "
             "visible evidence, distinguish observations from uncertainty, call out "
@@ -237,18 +298,35 @@ def _message_text(message: Any) -> str:
 
 
 def analyze_dashboard(
-    config: Config, prompt: str, image: bytes, agent: Agent | None = None
+    config: Config,
+    prompt: str,
+    dashboard_image: bytes,
+    greenhouse_image: bytes,
+    agent: Agent | None = None,
 ) -> str:
-    image_base64 = base64.b64encode(image).decode("ascii")
+    dashboard_base64 = base64.b64encode(dashboard_image).decode("ascii")
+    greenhouse_base64 = base64.b64encode(greenhouse_image).decode("ascii")
     request = {
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {
+                        "type": "text",
+                        "text": (
+                            f"{prompt}\n\n"
+                            "The first image is the rendered monitoring dashboard. "
+                            "The second image is the latest full-resolution greenhouse "
+                            "camera capture; use it for detailed visual observations."
+                        ),
+                    },
                     {
                         "type": "image_url",
-                        "image_url": f"data:image/png;base64,{image_base64}",
+                        "image_url": f"data:image/png;base64,{dashboard_base64}",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": f"data:image/jpeg;base64,{greenhouse_base64}",
                     },
                 ],
             }
@@ -283,14 +361,19 @@ def write_file(path: Path, content: bytes) -> None:
 def publish_analysis(
     config: Config,
     analysis: str,
-    image: bytes,
+    dashboard_image: bytes,
+    greenhouse_image: bytes,
     published_at: datetime | None = None,
 ) -> Path:
     timestamp = published_at or datetime.now().astimezone()
     date_slug = timestamp.date().isoformat()
     image_name = f"greenhouse-dashboard-{date_slug}.png"
+    greenhouse_image_name = f"greenhouse-full-view-{date_slug}.jpg"
     article_path = config.site_content_directory / f"greenhouse-analysis-{date_slug}.md"
     image_path = config.site_content_directory / "images" / image_name
+    greenhouse_image_path = (
+        config.site_content_directory / "images" / greenhouse_image_name
+    )
     safe_analysis = html.escape(analysis, quote=False)
     article = (
         f"Title: Greenhouse Analysis - {timestamp:%B %-d, %Y}\n"
@@ -300,9 +383,12 @@ def publish_analysis(
         "Tags: greenhouse, climate, plants\n"
         "Summary: Daily greenhouse dashboard and AI-assisted review.\n\n"
         f"![Greenhouse dashboard for {date_slug}]({{static}}/images/{image_name})\n\n"
+        f"![Full greenhouse view for {date_slug}]"
+        f"({{static}}/images/{greenhouse_image_name})\n\n"
         f"{safe_analysis}\n"
     )
-    write_file(image_path, image)
+    write_file(image_path, dashboard_image)
+    write_file(greenhouse_image_path, greenhouse_image)
     write_file(article_path, article.encode("utf-8"))
     build_site(config)
     return article_path
@@ -330,13 +416,19 @@ def build_site(config: Config) -> None:
 def run(config: Config, dry_run: bool = False) -> str:
     prompt = read_prompt(config)
     logger.info("Rendering Grafana dashboard %s", config.grafana_dashboard_uid)
-    image = render_dashboard(config)
+    dashboard_image = render_dashboard(config)
+    logger.info("Fetching latest full-resolution greenhouse image")
+    greenhouse_image = fetch_greenhouse_image(config)
     logger.info("Analyzing dashboard with Ollama model %s", config.ollama_model)
-    analysis = analyze_dashboard(config, prompt, image)
+    analysis = analyze_dashboard(
+        config, prompt, dashboard_image, greenhouse_image
+    )
     if dry_run:
         print(analysis)
     else:
-        article_path = publish_analysis(config, analysis, image)
+        article_path = publish_analysis(
+            config, analysis, dashboard_image, greenhouse_image
+        )
         logger.info("Published greenhouse analysis from %s", article_path)
     return analysis
 
@@ -372,6 +464,7 @@ def main() -> None:
         config = Config.from_env()
         if args.check_config:
             read_prompt(config)
+            validate_skills_directory(config)
             logger.info("Configuration is valid")
             return
         run(config, dry_run=args.dry_run)

@@ -19,6 +19,7 @@ rm -rf "${ROOT_DIR}/build/analyzer"
 mkdir -p \
 	"$PACKAGE_ROOT/DEBIAN" \
 	"$PACKAGE_ROOT/etc/greenhouse-analyzer" \
+	"$PACKAGE_ROOT/etc/greenhouse-analyzer/skills/greenhouse-interpretation" \
 	"$PACKAGE_ROOT/lib/systemd/system" \
 	"$PACKAGE_ROOT/opt/greenhouse-analyzer/src" \
 	"$PACKAGE_ROOT/usr/bin" \
@@ -37,6 +38,8 @@ cp "$ROOT_DIR/analyzer/greenhouse-analyzer.env" \
 	"$PACKAGE_ROOT/etc/greenhouse-analyzer/greenhouse-analyzer.env"
 cp "$ROOT_DIR/analyzer/prompt.txt" \
 	"$PACKAGE_ROOT/etc/greenhouse-analyzer/prompt.txt"
+cp "$ROOT_DIR/analyzer/skills/greenhouse-interpretation/SKILL.md" \
+	"$PACKAGE_ROOT/etc/greenhouse-analyzer/skills/greenhouse-interpretation/SKILL.md"
 cp "$ROOT_DIR/analyzer/pelicanconf.py" \
 	"$PACKAGE_ROOT/etc/greenhouse-analyzer/pelicanconf.py"
 cp -R "$ROOT_DIR/analyzer/site" \
@@ -56,6 +59,8 @@ ln -s /opt/greenhouse-analyzer/venv/bin/greenhouse-analyzer \
 	"$PACKAGE_ROOT/usr/bin/greenhouse-analyzer"
 
 chmod 640 "$PACKAGE_ROOT/etc/greenhouse-analyzer/greenhouse-analyzer.env"
+chmod 640 \
+	"$PACKAGE_ROOT/etc/greenhouse-analyzer/skills/greenhouse-interpretation/SKILL.md"
 chmod 755 "$PACKAGE_ROOT/DEBIAN/postinst" "$PACKAGE_ROOT/DEBIAN/prerm" \
 	"$PACKAGE_ROOT/DEBIAN/postrm"
 

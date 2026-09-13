@@ -16,6 +16,9 @@ case "$1" in
         chmod 750 "$STATE_DIR"
         chown root:greenhouse-analyzer /etc/greenhouse-analyzer/greenhouse-analyzer.env
         chmod 640 /etc/greenhouse-analyzer/greenhouse-analyzer.env
+        chown -R root:greenhouse-analyzer /etc/greenhouse-analyzer/skills
+        find /etc/greenhouse-analyzer/skills -type d -exec chmod 750 {} \;
+        find /etc/greenhouse-analyzer/skills -type f -exec chmod 640 {} \;
 
         rm -rf "$VENV_DIR"
         python3 -m venv "$VENV_DIR"

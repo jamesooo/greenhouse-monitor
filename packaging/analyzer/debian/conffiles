@@ -1,3 +1,4 @@
 /etc/greenhouse-analyzer/greenhouse-analyzer.env
 /etc/greenhouse-analyzer/pelicanconf.py
 /etc/greenhouse-analyzer/prompt.txt
+/etc/greenhouse-analyzer/skills/greenhouse-interpretation/SKILL.md
