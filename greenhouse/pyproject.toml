@@ -23,6 +23,7 @@ greenhouse-monitor = "greenhouse.greenhouse_monitor:main"
 
 [tool.setuptools]
 packages = ["greenhouse"]
+package-dir = { greenhouse = "." }
 
 [tool.setuptools.dynamic]
 version = { file = ["VERSION"] }

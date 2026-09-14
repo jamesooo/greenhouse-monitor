@@ -31,7 +31,7 @@ jobs:
           VERSION_OVERRIDE: ${{ inputs.version }}
           REVISION_OVERRIDE: ${{ inputs.revision }}
         run: |
-          version="${VERSION_OVERRIDE:-$(tr -d '[:space:]' < VERSION)}"
+          version="${VERSION_OVERRIDE:-$(tr -d '[:space:]' < greenhouse/VERSION)}"
           revision="${REVISION_OVERRIDE:-6}"
           bash packaging/build-deb.sh "$version" "$revision"
 

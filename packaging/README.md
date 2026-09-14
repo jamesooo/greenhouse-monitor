@@ -6,7 +6,7 @@ Build the package from the repository root:
 bash packaging/build-deb.sh
 ```
 
-The version comes from `VERSION`, and the Debian revision defaults to `6`. Both can be overridden:
+The version comes from `greenhouse/VERSION`, and the Debian revision defaults to `6`. Both can be overridden:
 
 ```bash
 bash packaging/build-deb.sh 1.5.1 2

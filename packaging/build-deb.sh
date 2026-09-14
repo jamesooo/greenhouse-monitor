@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")}"
+VERSION="${1:-$(tr -d '[:space:]' < "${ROOT_DIR}/greenhouse/VERSION")}"
 REVISION="${2:-7}"
 PACKAGE_NAME="greenhouse-monitor"
 PACKAGE_VERSION="${VERSION}-${REVISION}"
@@ -36,9 +36,7 @@ mkdir -p \
 	"$PACKAGE_ROOT/var/log/greenhouse" \
 	"$OUTPUT_DIR"
 
-cp -R "$ROOT_DIR/greenhouse" "$PACKAGE_ROOT/opt/greenhouse/src/"
-cp "$ROOT_DIR/pyproject.toml" "$ROOT_DIR/VERSION" \
-	"$PACKAGE_ROOT/opt/greenhouse/src/"
+cp -R "$ROOT_DIR/greenhouse/." "$PACKAGE_ROOT/opt/greenhouse/src/"
 cp "$ROOT_DIR/packaging/requirements.txt" \
 	"$PACKAGE_ROOT/opt/greenhouse/src/requirements.txt"
 cp "$ROOT_DIR/greenhouse/greenhouse.env" \
